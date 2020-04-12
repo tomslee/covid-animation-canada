@@ -32,7 +32,7 @@ from scipy.optimize import curve_fit
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
 START_DAYS_OFFSET = 15
-FIT_POINTS = 7
+FIT_POINTS = 12
 FETCH_ALWAYS = False
 FRAME_COUNT = 30
 YLIM_MAX = 30000
@@ -48,7 +48,7 @@ IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
 # Set up graphics
 #-------------------------------------------------------------------------------
 plt.style.use("ggplot")
-mpl.rcParams['figure.figsize'] = [8.0, 5.0]
+mpl.rcParams['figure.figsize'] = [7.0, 4.0]
 mpl.rcParams['figure.dpi'] = 90
 mpl.rcParams['savefig.dpi'] = 100
 # mpl.rcParams['font.size'] = 12
@@ -173,7 +173,7 @@ def multifit(data, most_current_day, fit_points, frame_count):
     popt = (3, 0.01, -6)
     for frame in range(frame_count):
         observation_day = most_current_day - frame_count + frame + 1
-        days_extrapolation = most_current_day - observation_day
+        days_extrapolation = most_current_day - observation_day + 1
         (data, popt) = fit_trends(data, popt,
                                   observation_day=observation_day,
                                   fit_points=fit_points)
