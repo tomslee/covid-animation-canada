@@ -25,17 +25,6 @@ import pandas as pd
 import requests
 from scipy.optimize import curve_fit
 
-#-------------------------------------------------------------------------------
-# Set up graphics
-#-------------------------------------------------------------------------------
-plt.style.use("ggplot")
-mpl.rcParams['figure.figsize'] = [8.0, 5.0]
-mpl.rcParams['figure.dpi'] = 90
-mpl.rcParams['savefig.dpi'] = 100
-# mpl.rcParams['font.size'] = 12
-# mpl.rcParams['legend.fontsize'] = 'large'
-# mpl.rcParams['figure.titlesize'] = 'medium'
-sns.set()
 
 #-------------------------------------------------------------------------------
 # Parameters
@@ -48,11 +37,30 @@ FETCH_ALWAYS = False
 FRAME_COUNT = 30
 YLIM_MAX = 30000
 INTERPOLATIONS = 5
+# TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
 IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
 # For ImageMagick configuration, see
 # https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
+
+
+#-------------------------------------------------------------------------------
+# Set up graphics
+#-------------------------------------------------------------------------------
+plt.style.use("ggplot")
+mpl.rcParams['figure.figsize'] = [8.0, 5.0]
+mpl.rcParams['figure.dpi'] = 90
+mpl.rcParams['savefig.dpi'] = 100
+# mpl.rcParams['font.size'] = 12
+# mpl.rcParams['legend.fontsize'] = 'large'
+# mpl.rcParams['figure.titlesize'] = 'medium'
+sns.set()
+sns.set_palette("muted")
 plt.rcParams['animation.convert_path'] = IMAGEMAGICK_EXE
 
+
+#-------------------------------------------------------------------------------
+# Functions
+#-------------------------------------------------------------------------------
 def get_df(fetch=FETCH_ALWAYS):
     """
     Download data from the COVID-19 Canada Open Data Working Group.
@@ -90,7 +98,7 @@ def get_df(fetch=FETCH_ALWAYS):
                                    df_agg["cumulative_shift1"])
     return df_agg
 
-# curve fit: define the fitting function
+
 def exp_fit(x_var, a_factor, k_exponent, b_intercept):
     """
     Fitting function for curve fitting (below)
@@ -98,7 +106,7 @@ def exp_fit(x_var, a_factor, k_exponent, b_intercept):
     return a_factor * np.exp(x_var * k_exponent) + b_intercept
 
 
-def fit_trends(data, observation_day, fit_points=FIT_POINTS):
+def fit_trends(data, popt, observation_day, fit_points=FIT_POINTS):
     """
     Fit a line through the observations in the data frame
     """
@@ -111,7 +119,7 @@ def fit_trends(data, observation_day, fit_points=FIT_POINTS):
     #print(x, y, x_normalized, y_normalized)
     # feed it into scipy, method is one of ‘lm’, ‘trf’, ‘dogbox’}
     popt, pcov = curve_fit(exp_fit, x_normalized, y_normalized,
-                           method="trf", p0=(3, 0.01, -6), maxfev=10000)
+                           method="trf", p0=popt, maxfev=10000)
     # add columns to the data frame holding trend values to the dataframe
     series = "fit_{}".format(observation_day)
     data[series] = x_normalized.apply(lambda x: int(exp_fit(x, *popt) * norm_y))
@@ -135,6 +143,7 @@ def extrapolate_trends(data, popt,
                 int(exp_fit((this_days - norm_x + 1), *popt) * norm_y)
     return data
 
+
 def double_time(data, observation_date):
     """
     Compute the doubling time of cases at a given observation date
@@ -156,10 +165,11 @@ def multifit(data, most_current_day, fit_points, frame_count):
     Call fit_trends and extrapolate_trends for each day, adding
     a column for each day's trend to the dataframe.
     """
+    popt = (3, 0.01, -6)
     for frame in range(frame_count):
         observation_day = most_current_day - frame_count + frame + 1
         days_extrapolation = most_current_day - observation_day
-        (data, popt) = fit_trends(data,
+        (data, popt) = fit_trends(data, popt,
                                   observation_day=observation_day,
                                   fit_points=fit_points)
         data = extrapolate_trends(data, popt,
@@ -171,13 +181,15 @@ def multifit(data, most_current_day, fit_points, frame_count):
     return data
 
 
-def next_frame(i, artists, most_current_day, frame_count, data):
+def next_frame(i, artists, fit_points, most_current_day, frame_count, data):
     """
     Function called from animator to generate frame i of the animation.
     """
-    (text, lines, axis) = artists
+    (texts, lines, axis) = artists
     interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
     observation_day = most_current_day - frame_count + int(i/INTERPOLATIONS) + 1
+    observation_date = data[data["day"] == observation_day].iloc[0]["date"]
+    expected_current_value = round(int(data["fit_{}".format(observation_day)].max()), -3)
     if interpolate != 0 and observation_day < most_current_day: # interpolate
         yfit_lower = data["fit_{}".format(observation_day)].to_list()
         yfit_upper = data["fit_{}".format(observation_day + 1)].to_list()
@@ -185,12 +197,19 @@ def next_frame(i, artists, most_current_day, frame_count, data):
                 range(len(yfit_lower))]
     else:
         yfit = data["fit_{}".format(observation_day)].to_list()
-    text_value = round(int(data["fit_{}".format(observation_day)].max()), -3)
-    text.set_text("{:d}".format(text_value))
-    text.set_text("")
-    text.set_position(
+    texts[0].set_text("{:d}".format(expected_current_value))
+    texts[0].set_text("")
+    texts[0].set_position(
         (data["day"].max() + 0.5, min(
             YLIM_MAX, data["fit_{}".format(observation_day)].max())))
+    caption = "\n".join((
+        "Following the trend of the {} days before {},".format(
+            fit_points, observation_date.strftime("%b %d")),
+        "we could have expected {} thousand".format(
+            int(expected_current_value/1000)),
+        "Covid-19 cases in Canada by {}.".format(data["date"].max().strftime("%b %d"))
+    ))
+    texts[1].set_text(caption)
     yobs = data["cumulative"].to_list()
     # Set yobs to None for day > observation_day
     yobs = [yobs[i] if i < (observation_day-data["day"].min()) else None for i in
@@ -198,7 +217,7 @@ def next_frame(i, artists, most_current_day, frame_count, data):
     lines[0].set_ydata(yobs)
     lines[1].set_ydata(yfit)
     axis.set_title("Flattening the curve in Canada")
-    return (axis, text)
+    return (axis, texts)
 
 
 def main():
@@ -222,16 +241,26 @@ def main():
     axis = plt.gca()
     axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
     axis.set_ylim(bottom=0, top=YLIM_MAX)
-    lines = axis.plot(df1["day"], df1["cumulative"], "ro",
-                      df1["day"], df1["cumulative"], "b-", markersize=8)
-    text = plt.text(x=df1["day"].max() + 0.2, y=df1["cumulative"].max(), s="",
-                    ha="left")
+    lines = axis.plot(df1["day"], df1["cumulative"], "o",
+                      df1["day"], df1["cumulative"], "-", markersize=8)
+    axis.text(x=df1["day"].max() + 0.2, y=df1["cumulative"].max(), s="", ha="left")
+    axis.text(0.025, 0.96, "",
+              bbox={"facecolor": "white", # 'facecolor': sns.color_palette()[7],
+                    'alpha': 0.5, 'pad': 8},
+              verticalalignment="top",
+              transform=axis.transAxes,
+              fontsize=11,
+              alpha=0.8)
+    texts = [child
+             for child in axis.get_children()
+             if isinstance(child, mpl.text.Text)]
+    #print(texts)
     axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
     xlabels = [df1.iloc[i]["date"].strftime("%b %d") for i in range(0, len(df1), 7)]
     axis.set_xticklabels(xlabels)
-    artists = (text, lines, axis)
+    artists = (texts, lines, axis)
     anim = FuncAnimation(fig, next_frame, frames=np.arange(INTERPOLATIONS * frame_count),
-                         fargs=[artists, most_current_day, frame_count, df1],
+                         fargs=[artists, fit_points, most_current_day, frame_count, df1],
                          interval=100, repeat=True, repeat_delay=2000)
     if args.save:
         writer = ImageMagickFileWriter()
