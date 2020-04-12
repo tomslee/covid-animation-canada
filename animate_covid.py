@@ -225,17 +225,16 @@ def next_frame(i, artists, fit_points, most_current_day, frame_count, data):
     return (axis, texts)
 
 
-def main():
+def cumulative_case_trend(data, save_output=False):
     """
-    Entry point.
+    Plot the trend of cumulative cases, observed at
+    earlier days, evolving over time.
     """
-    args = parse_args()
-    df0 = get_df()
-    most_current_day = df0["day"].max()
-    start_day = df0["day"].min() + START_DAYS_OFFSET
+    most_current_day = data["day"].max()
+    start_day = data["day"].min() + START_DAYS_OFFSET
     fit_points = FIT_POINTS
     frame_count = FRAME_COUNT
-    df1 = multifit(df0, most_current_day, fit_points, frame_count)
+    df1 = multifit(data, most_current_day, fit_points, frame_count)
     df1 = df1[df1["day"] >= start_day].copy()
 
     # initial plot
@@ -245,7 +244,7 @@ def main():
     plt.title("Covid-19 extrapolations")
     axis = plt.gca()
     plt.yscale(YSCALE)
-    if YSCALE=="log":
+    if YSCALE =="log":
         axis.set_ylim(bottom=10, top=YLIM_MAX)
     else:
         axis.set_ylim(bottom=0, top=YLIM_MAX)
@@ -271,7 +270,7 @@ def main():
     anim = FuncAnimation(fig, next_frame, frames=np.arange(INTERPOLATIONS * frame_count),
                          fargs=[artists, fit_points, most_current_day, frame_count, df1],
                          interval=100, repeat=True, repeat_delay=2000)
-    if args.save:
+    if save_output:
         writer = ImageMagickFileWriter()
         anim.save('covid.gif', writer=writer)
     else:
@@ -292,6 +291,16 @@ def parse_args():
                         default=False)
     args = parser.parse_args()
     return args
+
+
+def main():
+    """
+    Entry point.
+    """
+    args = parse_args()
+    df0 = get_df()
+    cumulative_case_trend(df0, args.save)
+
 
 if __name__ == '__main__':
     main()
