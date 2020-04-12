@@ -35,9 +35,6 @@ mpl.rcParams['savefig.dpi'] = 100
 # mpl.rcParams['font.size'] = 12
 # mpl.rcParams['legend.fontsize'] = 'large'
 # mpl.rcParams['figure.titlesize'] = 'medium'
-# For ImageMagick configuration, see
-# https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
-plt.rcParams['animation.convert_path'] = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
 sns.set()
 
 #-------------------------------------------------------------------------------
@@ -51,6 +48,10 @@ FETCH_ALWAYS = False
 FRAME_COUNT = 30
 YLIM_MAX = 30000
 INTERPOLATIONS = 5
+IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
+# For ImageMagick configuration, see
+# https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
+plt.rcParams['animation.convert_path'] = IMAGEMAGICK_EXE
 
 def get_df(fetch=FETCH_ALWAYS):
     """
@@ -175,9 +176,8 @@ def next_frame(i, artists, most_current_day, frame_count, data):
     Function called from animator to generate frame i of the animation.
     """
     (text, lines, axis) = artists
-    base_frame = int(i/INTERPOLATIONS)
     interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
-    observation_day = most_current_day - frame_count + base_frame + 1
+    observation_day = most_current_day - frame_count + int(i/INTERPOLATIONS) + 1
     if interpolate != 0 and observation_day < most_current_day: # interpolate
         yfit_lower = data["fit_{}".format(observation_day)].to_list()
         yfit_upper = data["fit_{}".format(observation_day + 1)].to_list()
@@ -230,10 +230,9 @@ def main():
     xlabels = [df1.iloc[i]["date"].strftime("%b %d") for i in range(0, len(df1), 7)]
     axis.set_xticklabels(xlabels)
     artists = (text, lines, axis)
-    fargs = [artists, most_current_day, frame_count, df1]
     anim = FuncAnimation(fig, next_frame, frames=np.arange(INTERPOLATIONS * frame_count),
-                         fargs=fargs, interval=100,
-                         repeat=True, repeat_delay=2000)
+                         fargs=[artists, most_current_day, frame_count, df1],
+                         interval=100, repeat=True, repeat_delay=2000)
     if args.save:
         writer = ImageMagickFileWriter()
         anim.save('covid.gif', writer=writer)
