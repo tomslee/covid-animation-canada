@@ -36,6 +36,7 @@ FIT_POINTS = 7
 FETCH_ALWAYS = False
 FRAME_COUNT = 30
 YLIM_MAX = 30000
+YSCALE = "linear" # "linear", "log", "symlog", "logit", 
 INTERPOLATIONS = 5
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
 IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
@@ -137,10 +138,14 @@ def extrapolate_trends(data, popt,
     norm_x = data["day"].loc[observation_day - fit_points:].min()
     norm_y = data["cumulative"].loc[observation_day - fit_points:observation_day].max()
     observation_row = data.loc[observation_day]
-    for days in range(1, days_extrapolation):
-        this_days = observation_row["day"] + days
-        data.loc[this_days, "fit_{}".format(observation_day)] = \
-                int(exp_fit((this_days - norm_x + 1), *popt) * norm_y)
+    for day in range(1, days_extrapolation):
+        this_day = observation_row["day"] + day
+        data.loc[this_day, "fit_{}".format(observation_day)] = \
+                int(exp_fit((this_day - norm_x + 1), *popt) * norm_y)
+    for days in range(observation_day - fit_points):
+        this_day = observation_row["day"] - fit_points - days
+        data.loc[this_day, "fit_{}".format(observation_day)] = \
+                int(exp_fit((this_day - norm_x + 1), *popt) * norm_y)
     return data
 
 
@@ -239,8 +244,12 @@ def main():
     plt.ylabel("Cumulative cases")
     plt.title("Covid-19 extrapolations")
     axis = plt.gca()
+    plt.yscale(YSCALE)
+    if YSCALE=="log":
+        axis.set_ylim(bottom=10, top=YLIM_MAX)
+    else:
+        axis.set_ylim(bottom=0, top=YLIM_MAX)
     axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
-    axis.set_ylim(bottom=0, top=YLIM_MAX)
     lines = axis.plot(df1["day"], df1["cumulative"], "o",
                       df1["day"], df1["cumulative"], "-", markersize=8)
     axis.text(x=df1["day"].max() + 0.2, y=df1["cumulative"].max(), s="", ha="left")
