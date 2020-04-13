@@ -107,7 +107,7 @@ def exp_fit(x_var, a_factor, k_exponent, b_intercept):
     return a_factor * np.exp(x_var * k_exponent) + b_intercept
 
 
-def fit_trends(data, popt, observation_day, fit_points=FIT_POINTS):
+def fit_trends(data, p0, observation_day, fit_points=FIT_POINTS):
     """
     Fit a line through the observations in the data frame
     """
@@ -120,32 +120,27 @@ def fit_trends(data, popt, observation_day, fit_points=FIT_POINTS):
     #print(x, y, x_normalized, y_normalized)
     # feed it into scipy, method is one of ‘lm’, ‘trf’, ‘dogbox’}
     popt, pcov = curve_fit(exp_fit, x_normalized, y_normalized,
-                           method="trf", p0=popt, maxfev=10000)
+                           method="trf", p0=p0, maxfev=10000)
     # add columns to the data frame holding trend values to the dataframe
     series = "fit_{}".format(observation_day)
-    data[series] = x_normalized.apply(lambda x: int(exp_fit(x, *popt) * norm_y))
-    return(data, popt)
+    return(popt)
 
 
-def extrapolate_trends(data, popt,
+def add_series_from_fit(data, popt,
                        observation_day,
                        fit_points=FIT_POINTS,
                        days_extrapolation=DAYS_EXTRAPOLATION):
     """
-    Given a fitted function, use it to extrapolate the data for
-    a given observation day into the future (for that day).
+    Given a fitted function for a given observation day, 
+    use it to add a column to the dataframe "data" with 
+    values of that function for the whole data range.
     """
     norm_x = data["day"].loc[observation_day - fit_points:].min()
     norm_y = data["cumulative"].loc[observation_day - fit_points:observation_day].max()
     observation_row = data.loc[observation_day]
-    for day in range(1, days_extrapolation):
-        this_day = observation_row["day"] + day
-        data.loc[this_day, "fit_{}".format(observation_day)] = \
-                int(exp_fit((this_day - norm_x + 1), *popt) * norm_y)
-    for days in range(observation_day - fit_points):
-        this_day = observation_row["day"] - fit_points - days
-        data.loc[this_day, "fit_{}".format(observation_day)] = \
-                int(exp_fit((this_day - norm_x + 1), *popt) * norm_y)
+    for day in range(len(data)):
+        data.loc[day, "fit_{}".format(observation_day)] = \
+                int(exp_fit((day - norm_x + 1), *popt) * norm_y)
     return data
 
 
@@ -167,20 +162,20 @@ def double_time(data, observation_date):
 
 def multifit(data, most_current_day, fit_points, frame_count):
     """
-    Call fit_trends and extrapolate_trends for each day, adding
+    Call fit_trends and add_series_from_fit for each day, adding
     a column for each day's trend to the dataframe.
     """
     popt = (3, 0.01, -6)
     for frame in range(frame_count):
         observation_day = most_current_day - frame_count + frame + 1
         days_extrapolation = most_current_day - observation_day + 1
-        (data, popt) = fit_trends(data, popt,
-                                  observation_day=observation_day,
-                                  fit_points=fit_points)
-        data = extrapolate_trends(data, popt,
-                                  observation_day=observation_day,
-                                  fit_points=fit_points,
-                                  days_extrapolation=days_extrapolation)
+        popt = fit_trends(data, popt,
+                          observation_day=observation_day,
+                          fit_points=fit_points)
+        data = add_series_from_fit(data, popt,
+                                   observation_day=observation_day,
+                                   fit_points=fit_points,
+                                   days_extrapolation=days_extrapolation)
         print("Prediction {}: {}".format(frame,
                                          int(data['fit_{}'.format(observation_day)].max())))
     return data
