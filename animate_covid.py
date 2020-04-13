@@ -34,12 +34,12 @@ DAYS_ANNOTATE = 6
 START_DAYS_OFFSET = 5
 FIT_POINTS = 12
 FETCH_ALWAYS = False
-FRAME_COUNT = 30
+FRAME_COUNT = 32
 YLIM_MAX = 30000
 YSCALE = "linear" # "linear", "log", "symlog", "logit", 
 INTERPOLATIONS = 5
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
-IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
+IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.9-Q16/magick.exe"
 # For ImageMagick configuration, see
 # https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
 
@@ -212,7 +212,7 @@ def next_frame(i, artists, fit_points, most_current_day, frame_count, data):
     texts[1].set_text(caption)
     yobs = data["cumulative"].to_list()
     # Set yobs to None for day > observation_day
-    yobs = [yobs[i] if i < (observation_day-data["day"].min()) else None for i in
+    yobs = [yobs[i] if i <= (observation_day-data["day"].min()) else None for i in
             range(len(yobs))]
     lines[0].set_ydata(yobs)
     lines[1].set_ydata(yfit)
