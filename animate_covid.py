@@ -31,7 +31,7 @@ from scipy.optimize import curve_fit
 #-------------------------------------------------------------------------------
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
-START_DAYS_OFFSET = 15
+START_DAYS_OFFSET = 5
 FIT_POINTS = 12
 FETCH_ALWAYS = False
 FRAME_COUNT = 30
@@ -264,7 +264,7 @@ def cumulative_case_trend(data, save_output=False):
     artists = (texts, lines, axis)
     anim = FuncAnimation(fig, next_frame, frames=np.arange(INTERPOLATIONS * frame_count),
                          fargs=[artists, fit_points, most_current_day, frame_count, df1],
-                         interval=100, repeat=True, repeat_delay=2000)
+                         interval=200, repeat=True, repeat_delay=2000)
     if save_output:
         writer = ImageMagickFileWriter()
         anim.save('covid.gif', writer=writer)
