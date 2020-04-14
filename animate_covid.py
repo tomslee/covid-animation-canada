@@ -81,35 +81,139 @@ def get_df(fetch=FETCH_ALWAYS):
                                 sheet_name="Cases",
                                 skiprows=range(0, 3),
                                 index_col=0)
-    df_agg = df_download["date_report"].to_frame().groupby(
-        "date_report").apply(lambda x: x.count())
-    # df_agg has an index named date_report and a single column, named
-    # date_report. Fix this up to give a default index and a column "new_cases"
-    df_agg.rename(columns={"date_report": "new_cases"}, inplace=True)
-    df_agg.reset_index(inplace=True)
-    df_agg.rename(columns={"date_report": "date"}, inplace=True)
-    df_agg["date"] = [x.date() for x in df_agg["date"]]
-    df_agg["day"] = df_agg.index
-    df_agg["cumulative"] = df_agg["new_cases"].to_frame().expanding(1).sum()
-    df_agg["cumulative_shift1"] = df_agg["cumulative"].shift(1)
-    df_agg["cumulative_shift2"] = df_agg["cumulative"].shift(2)
-    df_agg["three_day_moving_average"] = (df_agg["cumulative"] +
-                                          df_agg["cumulative_shift1"] +
-                                          df_agg["cumulative_shift2"]) / 3.0
-    df_agg["cumulative"] = df_agg["three_day_moving_average"]
-    df_agg["growth_rate"] = 100 * (df_agg["new_cases"] /
-                                   df_agg["cumulative_shift1"])
-    return df_agg
+    return df_download
 
 
-class CumulativeCasePlot():
+class Plot():
+    """
+    Generic Plot class.
+    There's nothing here yet, but it will probably fill up as more plots
+    are added
+    """
+
+
+class GrowthRate(Plot):
+    """
+    Plot the percentage change in daily new cases
+    """
+    def __init__(self, data, save_output=False):
+        """
+        Initialize class variables and call what needs to be called.
+        """
+        self.data = data
+        self.save_output = save_output
+        self.prep()
+        self.plot()
+
+    def prep(self):
+        """
+        Take the raw dataframe and aggregate it so it can be used by this plot.
+        """
+        self.data = self.data["date_report"].to_frame().groupby(
+            "date_report").apply(lambda x: x.count())
+        self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
+        self.data.reset_index(inplace=True)
+        self.data.rename(columns={"date_report": "date"}, inplace=True)
+        self.data["date"] = [x.date() for x in self.data["date"]]
+        self.data["day"] = self.data.index
+        self.data["cumulative"] = self.data["new_cases"].to_frame().expanding(
+            1).sum()
+        self.data["cumulative_shift1"] = self.data["cumulative"].shift(1)
+        self.data["growth_rate"] = 100 * (self.data["new_cases"] /
+                                          self.data["cumulative_shift1"])
+        self.data["shift1"] = self.data["growth_rate"].shift(1)
+        self.data["shift2"] = self.data["growth_rate"].shift(2)
+        self.data["three_day_moving_average"] = (self.data["growth_rate"] +
+                                                 self.data["shift1"] +
+                                                 self.data["shift2"]) / 3.0
+        self.data["growth_rate"] = self.data["three_day_moving_average"]
+
+    def plot(self):
+        """
+        Plot it
+        """
+        df1 = self.data
+
+        # Initial plot
+        fig = plt.figure()
+        plt.xlabel("Date")
+        plt.ylabel("Percentage increase")
+        plt.title("Covid-19 increase in new cases")
+        axis = plt.gca()
+        plt.yscale(YSCALE)
+        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        # xlabels = [
+        # df1.iloc[i]["date"].strftime("%b %d")
+        # for i in range(0, len(df1), 7)
+        # ]
+        # axis.set_xticklabels(xlabels)
+        axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
+        lines = axis.plot(df1["day"], df1["growth_rate"], "-", lw=3)
+        artists = (lines, axis)
+        anim = FuncAnimation(fig,
+                             self.next_frame,
+                             frames=np.arange(INTERPOLATIONS * len(df1)),
+                             fargs=[artists],
+                             interval=200,
+                             repeat=False,
+                             repeat_delay=2000)
+        if self.save_output:
+            writer = ImageMagickFileWriter()
+            anim.save('covid_growth.gif', writer=writer)
+        else:
+            plt.show()
+
+    def next_frame(self, i, artists):
+        """
+        Function called from animator to generate frame i of the animation
+        """
+        (lines, axis) = artists
+        #interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
+        y_values = self.data["growth_rate"].to_list()
+        for day, _ in enumerate(y_values):
+            if day > i:
+                y_values[day] = None
+        lines[0].set_ydata(y_values)
+        return axis
+
+
+class CumulativeCases(Plot):
     """
     Plot cumulative cases
     """
     def __init__(self, data, save_output=False):
+        """
+        Initialize the class variables and call what needs to be called.
+        The dataframe "data" has a row for each case.
+        It must have the following columns:
+        - "date_report": the date a case is reported
+        """
         self.data = data
         self.save_output = save_output
+        self.prep()
         self.plot()
+
+    def prep(self):
+        """
+        Take the raw dataframe and aggregate it so it can be used by this plot.
+        """
+        self.data = self.data["date_report"].to_frame().groupby(
+            "date_report").apply(lambda x: x.count())
+        # df_agg has an index named date_report and a single column, named
+        # date_report. Fix this up to give a default index and a column "new_cases"
+        self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
+        self.data.reset_index(inplace=True)
+        self.data.rename(columns={"date_report": "date"}, inplace=True)
+        self.data["date"] = [x.date() for x in self.data["date"]]
+        self.data["day"] = self.data.index
+        self.data["cumulative"] = self.data["new_cases"].to_frame().expanding(
+            1).sum()
+        self.data["shift1"] = self.data["cumulative"].shift(1)
+        self.data["shift2"] = self.data["cumulative"].shift(2)
+        self.data["three_day_moving_average"] = (self.data["cumulative"] +
+                                                 self.data["shift1"] +
+                                                 self.data["shift2"]) / 3.0
+        self.data["cumulative"] = self.data["three_day_moving_average"]
 
     def plot(self):
         """
@@ -304,7 +408,6 @@ class CumulativeCasePlot():
         lines[0].set_ydata(yobs)
         lines[1].set_ydata(yfit)
         axis.set_title("Flattening the curve in Canada")
-        return (axis, texts)
 
 
 def parse_args():
@@ -345,13 +448,13 @@ def main():
     """
     args = parse_args()
     config = read_config(args)
-    df0 = get_df()
+    data = get_df()
     if args.plot == "cases":
-        CumulativeCasePlot(df0, args.save)
-    elif args.plot == "deaths":
-        print(args.save)
+        CumulativeCases(data, args.save)
+    elif args.plot == "growth":
+        GrowthRate(data, args.save)
     else:
-        print("Some other plot {}".format(args.plot))
+        print("Unknown plot choice: {}".format(args.plot))
 
 
 if __name__ == '__main__':
