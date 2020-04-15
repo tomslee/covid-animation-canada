@@ -103,7 +103,8 @@ class GrowthRate(Plot):
         self.data = data
         self.save_output = save_output
         self.prep()
-        self.plot()
+        growth_rate = self.smooth("growth_rate")
+        self.plot(growth_rate)
 
     def prep(self):
         """
@@ -121,14 +122,39 @@ class GrowthRate(Plot):
         self.data["cumulative_shift1"] = self.data["cumulative"].shift(1)
         self.data["growth_rate"] = 100 * (self.data["new_cases"] /
                                           self.data["cumulative_shift1"])
-        self.data["shift1"] = self.data["growth_rate"].shift(1)
-        self.data["shift2"] = self.data["growth_rate"].shift(2)
-        self.data["three_day_moving_average"] = (self.data["growth_rate"] +
-                                                 self.data["shift1"] +
-                                                 self.data["shift2"]) / 3.0
-        self.data["growth_rate"] = self.data["three_day_moving_average"]
+        #self.data["shift1"] = self.data["growth_rate"].shift(1)
+        #self.data["shift2"] = self.data["growth_rate"].shift(2)
+        #self.data["three_day_moving_average"] = (self.data["growth_rate"] +
+        #                                         self.data["shift1"] +
+        #                                         self.data["shift2"]) / 3.0
+        #self.data["growth_rate"] = self.data["three_day_moving_average"]
 
-    def plot(self):
+    def smooth(self, column, degree=3):
+        """
+        Smooth the list,
+        Taken from
+        https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
+        """
+        unsmoothed = self.data[column].to_list()
+        window = degree * 2 - 1
+        weight = np.array([1.0] * window)
+        weight_gauss = []
+        for i in range(window):
+            i = i - degree + 1
+            frac = i / float(window)
+            gauss = 1 / (np.exp((4 * frac)**2))
+            weight_gauss.append(gauss)
+        weight = np.array(weight_gauss) * weight
+        smoothed = [0.0] * len(unsmoothed)
+        for i, _ in enumerate(smoothed):
+            if i <= len(unsmoothed) - window:
+                smoothed[i] = sum(
+                    np.array(unsmoothed[i:i + window]) * weight) / sum(weight)
+            else:
+                smoothed[i] = float("NaN")
+        return smoothed
+
+    def plot(self, growth_rate):
         """
         Plot it
         """
@@ -138,24 +164,26 @@ class GrowthRate(Plot):
         fig = plt.figure()
         plt.xlabel("Date")
         plt.ylabel("Percentage increase")
-        plt.title("Covid-19 increase in new cases")
+        plt.title("Covid-19 percentage increase in cases")
         axis = plt.gca()
         plt.yscale(YSCALE)
-        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        # xlabels = [
-        # df1.iloc[i]["date"].strftime("%b %d")
-        # for i in range(0, len(df1), 7)
-        # ]
-        # axis.set_xticklabels(xlabels)
+        #print(df1["day"])
         axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
+        #lines = axis.plot(df1["day"], df1["growth_rate"], "-", lw=3)
         lines = axis.plot(df1["day"], df1["growth_rate"], "-", lw=3)
-        artists = (lines, axis)
+        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
+        xlabels = [
+            df1.iloc[i]["date"].strftime("%b %d")
+            for i in range(0, len(df1), 7)
+        ]
+        axis.set_xticklabels(xlabels)
         anim = FuncAnimation(fig,
                              self.next_frame,
                              frames=np.arange(INTERPOLATIONS * len(df1)),
-                             fargs=[artists],
-                             interval=200,
-                             repeat=False,
+                             fargs=[lines, axis, growth_rate],
+                             interval=500,
+                             repeat=True,
                              repeat_delay=2000)
         if self.save_output:
             writer = ImageMagickFileWriter()
@@ -163,18 +191,25 @@ class GrowthRate(Plot):
         else:
             plt.show()
 
-    def next_frame(self, i, artists):
+    def next_frame(self, i, lines, axis, growth_rate):
         """
         Function called from animator to generate frame i of the animation
         """
-        (lines, axis) = artists
-        #interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
-        y_values = self.data["growth_rate"].to_list()
+        y_values = growth_rate.copy()
+        # interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
+        # observation_day = int(i / INTERPOLATIONS) + 1
+        # if interpolate != 0:
+        # for day, _ in enumerate(y_values):
+        # y_values[day] = (interpolate * growth_rate[day+1] + (1.0 -
+        # interpolate) * (
+        # growth_rate[i]))
+        # else:
+        # yfit = data["fit_{}".format(observation_day)].to_list()
         for day, _ in enumerate(y_values):
             if day > i:
                 y_values[day] = None
         lines[0].set_ydata(y_values)
-        return axis
+        return lines, axis, growth_rate
 
 
 class CumulativeCases(Plot):
@@ -208,6 +243,8 @@ class CumulativeCases(Plot):
         self.data["day"] = self.data.index
         self.data["cumulative"] = self.data["new_cases"].to_frame().expanding(
             1).sum()
+
+    def smooth(self):
         self.data["shift1"] = self.data["cumulative"].shift(1)
         self.data["shift2"] = self.data["cumulative"].shift(2)
         self.data["three_day_moving_average"] = (self.data["cumulative"] +
@@ -231,7 +268,7 @@ class CumulativeCases(Plot):
         fig = plt.figure()
         plt.xlabel("Date")
         plt.ylabel("Cumulative cases")
-        plt.title("Covid-19 extrapolations")
+        plt.title("Flattening the curve in Canada")
         axis = plt.gca()
         plt.yscale(YSCALE)
         if YSCALE == "log":
@@ -407,7 +444,6 @@ class CumulativeCases(Plot):
         ]
         lines[0].set_ydata(yobs)
         lines[1].set_ydata(yfit)
-        axis.set_title("Flattening the curve in Canada")
 
 
 def parse_args():
