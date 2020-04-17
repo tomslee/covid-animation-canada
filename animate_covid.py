@@ -218,7 +218,11 @@ class CumulativeCases(Plot):
     """
     Plot cumulative cases
     """
-    def __init__(self, data, save_output=False):
+    def __init__(self,
+                 data,
+                 save_output=False,
+                 frame_count=FRAME_COUNT,
+                 fit_points=FIT_POINTS):
         """
         Initialize the class variables and call what needs to be called.
         The dataframe "data" has a row for each case.
@@ -227,6 +231,8 @@ class CumulativeCases(Plot):
         """
         self.data = data
         self.save_output = save_output
+        self.frame_count = frame_count
+        self.fit_points = fit_points
         self.prep()
         self.smooth()
         self.plot()
@@ -261,9 +267,7 @@ class CumulativeCases(Plot):
         earlier days, evolving over time.
         """
         most_current_day = self.data["day"].max()
-        fit_points = FIT_POINTS
-        frame_count = FRAME_COUNT
-        self.multifit(most_current_day, fit_points, frame_count)
+        self.multifit(most_current_day)
         start_day = self.data["day"].min() + START_DAYS_OFFSET
         df1 = self.data[self.data["day"] >= start_day].copy()
 
@@ -279,7 +283,7 @@ class CumulativeCases(Plot):
             axis.set_ylim(bottom=10, top=df1["cumulative"].max() * 1.5)
         else:
             axis.set_ylim(bottom=0, top=df1["cumulative"].max() * 1.5)
-        axis.plot(df1["day"], df1["cumulative"], "o", markersize=8)
+        axis.plot(df1["day"], df1["cumulative"], "o", markersize=8, alpha=0.8)
         axis.plot(df1["day"], df1["cumulative"], "-", lw=2, alpha=0.8)
         axis.text(
             0.025,
@@ -300,14 +304,14 @@ class CumulativeCases(Plot):
             for i in range(0, len(df1), 7)
         ]
         axis.set_xticklabels(xlabels)
-        anim = FuncAnimation(
-            fig,
-            self.next_frame,
-            frames=np.arange(INTERPOLATIONS * frame_count),
-            fargs=[axis, fit_points, most_current_day, frame_count, df1],
-            interval=200,
-            repeat=True,
-            repeat_delay=2000)
+        anim = FuncAnimation(fig,
+                             self.next_frame,
+                             frames=np.arange(INTERPOLATIONS *
+                                              self.frame_count),
+                             fargs=[axis, most_current_day, df1],
+                             interval=200,
+                             repeat=True,
+                             repeat_delay=2000)
         if self.save_output:
             writer = ImageMagickFileWriter()
             anim.save('covid.gif', writer=writer)
@@ -320,14 +324,15 @@ class CumulativeCases(Plot):
         """
         return a_factor * np.exp(x_var * k_exponent) + b_intercept
 
-    def fit_trends(self, popt, observation_day, fit_points=FIT_POINTS):
+    def fit_trends(self, popt, observation_day):
         """
         Fit a line through the observations in the data frame
         """
         x_list = self.data["day"].iloc[observation_day -
-                                       fit_points:observation_day + 1]
+                                       self.fit_points:observation_day + 1]
         y_list = self.data["cumulative"].iloc[observation_day -
-                                              fit_points:observation_day + 1]
+                                              self.fit_points:observation_day +
+                                              1]
         norm_x = x_list.min()
         norm_y = y_list.max()
         x_normalized = x_list - norm_x + 1
@@ -342,17 +347,14 @@ class CumulativeCases(Plot):
                                maxfev=10000)
         return popt, pcov
 
-    def add_series_from_fit(self,
-                            popt,
-                            observation_day,
-                            fit_points=FIT_POINTS):
+    def add_series_from_fit(self, popt, observation_day):
         """
         Given a fitted function for a given observation day,
         use it to add a column to the dataframe "data" with
         values of that function for the whole data range.
         """
-        norm_x = self.data["day"].loc[observation_day - fit_points:].min()
-        norm_y = self.data["cumulative"].loc[observation_day -
+        norm_x = self.data["day"].loc[observation_day - self.fit_points:].min()
+        norm_y = self.data["cumulative"].loc[observation_day - self.
                                              fit_points:observation_day].max()
         for day in range(len(self.data)):
             self.data.loc[day, "fit_{}".format(observation_day)] = \
@@ -373,25 +375,20 @@ class CumulativeCases(Plot):
         print(x_0, x_1, x_half, y_0, y_1, y_half, obs_day, double_days)
         return double_days
 
-    def multifit(self, most_current_day, fit_points, frame_count):
+    def multifit(self, most_current_day):
         """
         Call fit_trends and add_series_from_fit for each day, adding
         a column for each day's trend to the dataframe.
         """
         popt = (3, 0.01, -6)
-        for frame in range(frame_count):
-            observation_day = most_current_day - frame_count + frame + 1
-            popt, pcov = self.fit_trends(popt,
-                                         observation_day=observation_day,
-                                         fit_points=fit_points)
-            self.add_series_from_fit(popt,
-                                     observation_day=observation_day,
-                                     fit_points=fit_points)
+        for frame in range(self.frame_count):
+            observation_day = most_current_day - self.frame_count + frame + 1
+            popt, pcov = self.fit_trends(popt, observation_day=observation_day)
+            self.add_series_from_fit(popt, observation_day=observation_day)
             print("Prediction {}: {}".format(
                 frame, int(self.data['fit_{}'.format(observation_day)].max())))
 
-    def next_frame(self, i, axis, fit_points, most_current_day, frame_count,
-                   data):
+    def next_frame(self, i, axis, most_current_day, data):
         """
         Function called from animator to generate frame i of the animation.
         """
@@ -402,7 +399,7 @@ class CumulativeCases(Plot):
         ]
         lines = axis.get_lines()
         interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
-        observation_day = most_current_day - frame_count + int(
+        observation_day = most_current_day - self.frame_count + int(
             i / INTERPOLATIONS) + 1
         observation_date = data[data["day"] == observation_day].iloc[0]["date"]
         expected_current_value = round(
@@ -418,7 +415,7 @@ class CumulativeCases(Plot):
             yfit = data["fit_{}".format(observation_day)].to_list()
         caption = "\n".join(
             ("Following the trend of the {} days before {},".format(
-                fit_points, observation_date.strftime("%b %d")),
+                self.fit_points, observation_date.strftime("%b %d")),
              "we could have expected {} thousand".format(
                  int(expected_current_value / 1000)),
              "Covid-19 cases in Canada by {}.".format(
