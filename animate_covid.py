@@ -102,8 +102,9 @@ class GrowthRate(Plot):
         self.data = data
         self.save_output = save_output
         self.prep()
-        growth_rate_list = self.smooth("growth_rate")
+        growth_rate_list = self.data["growth_rate"].to_list()
         growth_rate_list = self.interpolate(growth_rate_list)
+        growth_rate_list = self.smooth(growth_rate_list)
         self.plot(growth_rate_list)
 
     def prep(self):
@@ -123,13 +124,25 @@ class GrowthRate(Plot):
         self.data["growth_rate"] = 100 * (self.data["new_cases"] /
                                           self.data["cumulative_shift1"])
 
-    def smooth(self, column, degree=3):
+    def interpolate(self, growth_rate):
+        """
+        Interpolate INTERPOLATIONS between every pair in growth_rate
+        """
+        new_length = (len(growth_rate) - 1) * INTERPOLATIONS
+        interpolated = [0.0] * new_length
+        for i in range(new_length):
+            quotient = int(i / INTERPOLATIONS)
+            mu_1 = (i % INTERPOLATIONS) / INTERPOLATIONS
+            interpolated[i] = ((1 - mu_1) * growth_rate[quotient] +
+                               mu_1 * growth_rate[quotient + 1])
+        return interpolated
+
+    def smooth(self, unsmoothed, degree=7):
         """
         Smooth the values in self.data[column], returning a list,
         Taken from
         https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
         """
-        unsmoothed = self.data[column].to_list()
         window = degree * 2 - 1
         weight = np.array([1.0] * window)
         weight_gauss = []
@@ -141,27 +154,12 @@ class GrowthRate(Plot):
         weight = np.array(weight_gauss) * weight
         smoothed = [0.0] * len(unsmoothed)
         for i, _ in enumerate(smoothed):
-            if i <= len(unsmoothed) - window:
+            try:
                 smoothed[i] = sum(
                     np.array(unsmoothed[i:i + window]) * weight) / sum(weight)
-            else:
+            except:
                 smoothed[i] = float("NaN")
         return smoothed
-
-    def interpolate(self, growth_rate):
-        """
-        Interpolate INTERPOLATIONS between every pair in growth_rate
-        """
-        new_length = (len(growth_rate) - 1) * INTERPOLATIONS
-        interpolated = [0.0] * new_length
-        for i in range(new_length):
-            quotient = int(i / INTERPOLATIONS)
-            mu_1 = (i % INTERPOLATIONS) / INTERPOLATIONS
-            # use cosine interpolation for smoother than linear interpolation
-            mu_2 = (1 - np.cos(mu_1 * np.pi)) / 2
-            interpolated[i] = ((1 - mu_2) * growth_rate[quotient] +
-                               mu_2 * growth_rate[quotient + 1])
-        return interpolated
 
     def plot(self, growth_rate):
         """
@@ -170,6 +168,8 @@ class GrowthRate(Plot):
         days = [i / INTERPOLATIONS for i in range(len(growth_rate))]
         start_day = self.data["day"].min() + START_DAYS_OFFSET
         df1 = self.data[self.data["day"] >= start_day].copy()
+        days = days[(START_DAYS_OFFSET * INTERPOLATIONS):]
+        growth_rate = growth_rate[(START_DAYS_OFFSET * INTERPOLATIONS):]
         # Initial plot
         fig = plt.figure()
         plt.xlabel("Date")
@@ -179,7 +179,7 @@ class GrowthRate(Plot):
         axis = plt.gca()
         axis.plot(days, growth_rate, "-", lw=3, alpha=0.8)
         axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        axis.set_xlim(left=min(days), right=max(days) - 3)
+        axis.set_xlim(left=min(days), right=max(days))
         if YSCALE == "log":
             axis.set_ylim(bottom=1, top=1.1 * np.nanmax(growth_rate))
         else:
@@ -211,7 +211,6 @@ class GrowthRate(Plot):
             if j > i:
                 y_values[j] = None
         axis.get_lines()[0].set_ydata(y_values)
-        return axis, growth_rate
 
 
 class CumulativeCases(Plot):
