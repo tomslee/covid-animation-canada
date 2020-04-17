@@ -226,6 +226,7 @@ class CumulativeCases(Plot):
         self.data = data
         self.save_output = save_output
         self.prep()
+        self.smooth()
         self.plot()
 
     def prep(self):
@@ -272,9 +273,9 @@ class CumulativeCases(Plot):
         axis = plt.gca()
         plt.yscale(YSCALE)
         if YSCALE == "log":
-            axis.set_ylim(bottom=10, top=YLIM_MAX)
+            axis.set_ylim(bottom=10, top=df1["cumulative"].max() * 1.5)
         else:
-            axis.set_ylim(bottom=0, top=YLIM_MAX)
+            axis.set_ylim(bottom=0, top=df1["cumulative"].max() * 1.5)
         axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
         lines = axis.plot(df1["day"],
                           df1["cumulative"],
@@ -282,11 +283,8 @@ class CumulativeCases(Plot):
                           df1["day"],
                           df1["cumulative"],
                           "-",
-                          markersize=8)
-        axis.text(x=df1["day"].max() + 0.2,
-                  y=df1["cumulative"].max(),
-                  s="",
-                  ha="left")
+                          markersize=8,
+                          lw=3)
         axis.text(
             0.025,
             0.96,
@@ -423,11 +421,6 @@ class CumulativeCases(Plot):
             ]
         else:
             yfit = data["fit_{}".format(observation_day)].to_list()
-        texts[0].set_text("{:d}".format(expected_current_value))
-        texts[0].set_text("")
-        texts[0].set_position(
-            (data["day"].max() + 0.5,
-             min(YLIM_MAX, data["fit_{}".format(observation_day)].max())))
         caption = "\n".join(
             ("Following the trend of the {} days before {},".format(
                 fit_points, observation_date.strftime("%b %d")),
@@ -435,7 +428,7 @@ class CumulativeCases(Plot):
                  int(expected_current_value / 1000)),
              "Covid-19 cases in Canada by {}.".format(
                  data["date"].max().strftime("%b %d"))))
-        texts[1].set_text(caption)
+        texts[0].set_text(caption)
         yobs = data["cumulative"].to_list()
         # Set yobs to None for day > observation_day
         yobs = [
