@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib as mpl
 from matplotlib.animation import FuncAnimation
-from matplotlib.animation import ImageMagickFileWriter
+from matplotlib.animation import ImageMagickFileWriter, FFMpegFileWriter
 import seaborn as sns
 import pandas as pd
 import requests
@@ -40,7 +40,7 @@ YSCALE = "linear"  # "linear", "log", "symlog", "logit",
 INTERPOLATIONS = 5
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
 # IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.9-Q16/magick.exe"
-IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.10-Q16/magick.exe"
+IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
 # For ImageMagick configuration, see
 # https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
 
@@ -51,12 +51,13 @@ plt.style.use("ggplot")
 mpl.rcParams['figure.figsize'] = [7.0, 4.0]
 mpl.rcParams['figure.dpi'] = 90
 mpl.rcParams['savefig.dpi'] = 100
+mpl.rcParams['animation.convert_path'] = IMAGEMAGICK_DIR + "/magick.exe"
+mpl.rcParams['animation.ffmpeg_path'] = IMAGEMAGICK_DIR + "/ffmpeg.exe"
 # mpl.rcParams['font.size'] = 12
 # mpl.rcParams['legend.fontsize'] = 'large'
 # mpl.rcParams['figure.titlesize'] = 'medium'
 sns.set()
 sns.set_palette("muted")
-plt.rcParams['animation.convert_path'] = IMAGEMAGICK_EXE
 
 
 #-------------------------------------------------------------------------------
@@ -95,7 +96,7 @@ class GrowthRate(Plot):
     """
     Plot the percentage change in daily new cases
     """
-    def __init__(self, data, save_output=False):
+    def __init__(self, data, save_output=""):
         """
         Initialize class variables and call what needs to be called.
         """
@@ -195,8 +196,12 @@ class GrowthRate(Plot):
                              fargs=[axis, growth_rate],
                              interval=50,
                              repeat=True,
-                             repeat_delay=1500)
-        if self.save_output:
+                             repeat_delay=1500,
+                             save_count=1500)
+        if self.save_output == "mp4":
+            writer = FFMpegFileWriter(fps=20, bitrate=1800)
+            anim.save('covid_growth.mp4', writer=writer)
+        elif self.save_output == "gif":
             writer = ImageMagickFileWriter()
             anim.save('covid_growth.gif', writer=writer)
         else:
@@ -219,7 +224,7 @@ class CumulativeCases(Plot):
     """
     def __init__(self,
                  data,
-                 save_output=False,
+                 save_output="",
                  frame_count=FRAME_COUNT,
                  fit_points=FIT_POINTS):
         """
@@ -311,7 +316,10 @@ class CumulativeCases(Plot):
                              interval=200,
                              repeat=True,
                              repeat_delay=2000)
-        if self.save_output:
+        if self.save_output == "mp4":
+            writer = FFMpegFileWriter(fps=20, bitrate=1800)
+            anim.save('covid.mp4', writer=writer)
+        elif self.save_output == "gif":
             writer = ImageMagickFileWriter()
             anim.save('covid.gif', writer=writer)
         else:
@@ -438,10 +446,13 @@ def parse_args():
                                      usage="%(prog)s [options]",
                                      fromfile_prefix_chars='@')
     parser.add_argument(
+        "-s",
         "--save",
-        action="store_true",
-        default=False,
-        help="save the gif file instead of displaying it",
+        metavar="save",
+        action="store",
+        type=str,
+        default="",
+        help="save the animation as a file; [gif] or mp4",
     )
     parser.add_argument("-p",
                         "--plot",
@@ -449,7 +460,7 @@ def parse_args():
                         action="store",
                         type=str,
                         default="cases",
-                        help="save the gif file instead of displaying it")
+                        help="statistic to plot; [cases] or growth")
     args = parser.parse_args()
     return args
 
