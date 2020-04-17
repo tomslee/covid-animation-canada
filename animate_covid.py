@@ -90,16 +90,27 @@ class Plot():
     There's nothing here yet, but it will probably fill up as more plots
     are added
     """
+    def output(self, anim, plt, plot_type, save_output):
+        filename = "covid_{}.{}".format(plot_type, save_output)
+        if save_output == "mp4":
+            writer = FFMpegFileWriter(fps=20, bitrate=1800)
+            anim.save(filename, writer=writer)
+        elif save_output == "gif":
+            writer = ImageMagickFileWriter()
+            anim.save(filename, writer=writer)
+        else:
+            plt.show()
 
 
 class GrowthRate(Plot):
     """
     Plot the percentage change in daily new cases
     """
-    def __init__(self, data, save_output=""):
+    def __init__(self, data, save_output="", plot_type="growth"):
         """
         Initialize class variables and call what needs to be called.
         """
+        self.plot_type = plot_type
         self.data = data
         self.save_output = save_output
         self.prep()
@@ -198,14 +209,7 @@ class GrowthRate(Plot):
                              repeat=True,
                              repeat_delay=1500,
                              save_count=1500)
-        if self.save_output == "mp4":
-            writer = FFMpegFileWriter(fps=20, bitrate=1800)
-            anim.save('covid_growth.mp4', writer=writer)
-        elif self.save_output == "gif":
-            writer = ImageMagickFileWriter()
-            anim.save('covid_growth.gif', writer=writer)
-        else:
-            plt.show()
+        super().output(anim, plt, self.plot_type, self.save_output)
 
     def next_frame(self, i, axis, growth_rate):
         """
@@ -225,6 +229,7 @@ class CumulativeCases(Plot):
     def __init__(self,
                  data,
                  save_output="",
+                 plot_type="cases",
                  frame_count=FRAME_COUNT,
                  fit_points=FIT_POINTS):
         """
@@ -236,6 +241,7 @@ class CumulativeCases(Plot):
         self.data = data
         self.save_output = save_output
         self.frame_count = frame_count
+        self.plot_type = plot_type
         self.fit_points = fit_points
         self.prep()
         self.smooth()
@@ -316,14 +322,7 @@ class CumulativeCases(Plot):
                              interval=200,
                              repeat=True,
                              repeat_delay=2000)
-        if self.save_output == "mp4":
-            writer = FFMpegFileWriter(fps=20, bitrate=1800)
-            anim.save('covid.mp4', writer=writer)
-        elif self.save_output == "gif":
-            writer = ImageMagickFileWriter()
-            anim.save('covid.gif', writer=writer)
-        else:
-            plt.show()
+        super().output(anim, plt, self.plot_type, self.save_output)
 
     def exp_fit(self, x_var, a_factor, k_exponent, b_intercept):
         """
