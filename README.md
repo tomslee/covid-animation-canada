@@ -40,12 +40,17 @@ To save the graph in a gif or mp4 file in the current directory instead of displ
 ## Output
 
 <video width="640" height="480" autoplay controls>
-  <source src="covid.mp4" type="video/mp4">
+  <source src="covid_cases.mp4" type="video/mp4">
   <source src="movie.ogg" type="video/ogg">
   Your browser does not support the video tag.
 </video>
 
+<video width="640" height="480" autoplay controls>
+  <source src="covid_growth.mp4" type="video/mp4">
+  <source src="movie.ogg" type="video/ogg">
+  Your browser does not support the video tag.
+</video>
 
-![](covid.gif)
+![](covid_cases.gif)
 
 ![](covid_growth.gif)
