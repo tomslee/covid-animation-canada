@@ -32,11 +32,10 @@ from scipy.optimize import curve_fit
 #-------------------------------------------------------------------------------
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
-START_DAYS_OFFSET = 5
-FIT_POINTS = 12
+START_DAYS_OFFSET = 10
+FIT_POINTS = 7
 FETCH_ALWAYS = False
 FRAME_COUNT = 32
-YLIM_MAX = 30000
 YSCALE = "linear"  # "linear", "log", "symlog", "logit",
 INTERPOLATIONS = 5
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
@@ -103,8 +102,9 @@ class GrowthRate(Plot):
         self.data = data
         self.save_output = save_output
         self.prep()
-        growth_rate = self.smooth("growth_rate")
-        self.plot(growth_rate)
+        growth_rate_list = self.smooth("growth_rate")
+        growth_rate_list = self.interpolate(growth_rate_list)
+        self.plot(growth_rate_list)
 
     def prep(self):
         """
@@ -122,16 +122,10 @@ class GrowthRate(Plot):
         self.data["cumulative_shift1"] = self.data["cumulative"].shift(1)
         self.data["growth_rate"] = 100 * (self.data["new_cases"] /
                                           self.data["cumulative_shift1"])
-        #self.data["shift1"] = self.data["growth_rate"].shift(1)
-        #self.data["shift2"] = self.data["growth_rate"].shift(2)
-        #self.data["three_day_moving_average"] = (self.data["growth_rate"] +
-        #                                         self.data["shift1"] +
-        #                                         self.data["shift2"]) / 3.0
-        #self.data["growth_rate"] = self.data["three_day_moving_average"]
 
     def smooth(self, column, degree=3):
         """
-        Smooth the list,
+        Smooth the values in self.data[column], returning a list,
         Taken from
         https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
         """
@@ -154,25 +148,42 @@ class GrowthRate(Plot):
                 smoothed[i] = float("NaN")
         return smoothed
 
+    def interpolate(self, growth_rate):
+        """
+        Interpolate INTERPOLATIONS between every pair in growth_rate
+        """
+        new_length = (len(growth_rate) - 1) * INTERPOLATIONS
+        interpolated = [0.0] * new_length
+        for i in range(new_length):
+            quotient = int(i / INTERPOLATIONS)
+            mu_1 = (i % INTERPOLATIONS) / INTERPOLATIONS
+            # use cosine interpolation for smoother than linear interpolation
+            mu_2 = (1 - np.cos(mu_1 * np.pi)) / 2
+            interpolated[i] = ((1 - mu_2) * growth_rate[quotient] +
+                               mu_2 * growth_rate[quotient + 1])
+        return interpolated
+
     def plot(self, growth_rate):
         """
         Plot it
         """
-        df1 = self.data
-
+        days = [i / INTERPOLATIONS for i in range(len(growth_rate))]
+        start_day = self.data["day"].min() + START_DAYS_OFFSET
+        df1 = self.data[self.data["day"] >= start_day].copy()
         # Initial plot
         fig = plt.figure()
         plt.xlabel("Date")
         plt.ylabel("Percentage increase")
-        plt.title("Covid-19 percentage increase in cases")
-        axis = plt.gca()
+        plt.title("Covid-19 daily percentage increase in cases")
         plt.yscale(YSCALE)
-        #print(df1["day"])
-        axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
-        #lines = axis.plot(df1["day"], df1["growth_rate"], "-", lw=3)
-        lines = axis.plot(df1["day"], df1["growth_rate"], "-", lw=3)
+        axis = plt.gca()
+        axis.plot(days, growth_rate, "-", lw=3, alpha=0.8)
         axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
+        axis.set_xlim(left=min(days), right=max(days) - 3)
+        if YSCALE == "log":
+            axis.set_ylim(bottom=1, top=1.1 * np.nanmax(growth_rate))
+        else:
+            axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
         xlabels = [
             df1.iloc[i]["date"].strftime("%b %d")
             for i in range(0, len(df1), 7)
@@ -180,36 +191,27 @@ class GrowthRate(Plot):
         axis.set_xticklabels(xlabels)
         anim = FuncAnimation(fig,
                              self.next_frame,
-                             frames=np.arange(INTERPOLATIONS * len(df1)),
-                             fargs=[lines, axis, growth_rate],
-                             interval=500,
+                             frames=np.arange(len(days)),
+                             fargs=[axis, growth_rate],
+                             interval=50,
                              repeat=True,
-                             repeat_delay=2000)
+                             repeat_delay=1500)
         if self.save_output:
             writer = ImageMagickFileWriter()
             anim.save('covid_growth.gif', writer=writer)
         else:
             plt.show()
 
-    def next_frame(self, i, lines, axis, growth_rate):
+    def next_frame(self, i, axis, growth_rate):
         """
         Function called from animator to generate frame i of the animation
         """
         y_values = growth_rate.copy()
-        # interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
-        # observation_day = int(i / INTERPOLATIONS) + 1
-        # if interpolate != 0:
-        # for day, _ in enumerate(y_values):
-        # y_values[day] = (interpolate * growth_rate[day+1] + (1.0 -
-        # interpolate) * (
-        # growth_rate[i]))
-        # else:
-        # yfit = data["fit_{}".format(observation_day)].to_list()
-        for day, _ in enumerate(y_values):
-            if day > i:
-                y_values[day] = None
-        lines[0].set_ydata(y_values)
-        return lines, axis, growth_rate
+        for j, _ in enumerate(y_values):
+            if j > i:
+                y_values[j] = None
+        axis.get_lines()[0].set_ydata(y_values)
+        return axis, growth_rate
 
 
 class CumulativeCases(Plot):
@@ -259,10 +261,10 @@ class CumulativeCases(Plot):
         earlier days, evolving over time.
         """
         most_current_day = self.data["day"].max()
-        start_day = self.data["day"].min() + START_DAYS_OFFSET
         fit_points = FIT_POINTS
         frame_count = FRAME_COUNT
         self.multifit(most_current_day, fit_points, frame_count)
+        start_day = self.data["day"].min() + START_DAYS_OFFSET
         df1 = self.data[self.data["day"] >= start_day].copy()
 
         # initial plot
@@ -272,49 +274,37 @@ class CumulativeCases(Plot):
         plt.title("Flattening the curve in Canada")
         axis = plt.gca()
         plt.yscale(YSCALE)
+        axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
         if YSCALE == "log":
             axis.set_ylim(bottom=10, top=df1["cumulative"].max() * 1.5)
         else:
             axis.set_ylim(bottom=0, top=df1["cumulative"].max() * 1.5)
-        axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
-        lines = axis.plot(df1["day"],
-                          df1["cumulative"],
-                          "o",
-                          df1["day"],
-                          df1["cumulative"],
-                          "-",
-                          markersize=8,
-                          lw=3)
+        axis.plot(df1["day"], df1["cumulative"], "o", markersize=8)
+        axis.plot(df1["day"], df1["cumulative"], "-", lw=2, alpha=0.8)
         axis.text(
             0.025,
             0.96,
             "",
             bbox={
                 "facecolor": "white",  # 'facecolor': sns.color_palette()[7],
-                'alpha': 0.5,
+                'alpha': 0.8,
                 'pad': 8
             },
             verticalalignment="top",
             transform=axis.transAxes,
             fontsize=11,
             alpha=0.8)
-        texts = [
-            child for child in axis.get_children()
-            if isinstance(child, mpl.text.Text)
-        ]
-        #print(texts)
         axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
         xlabels = [
             df1.iloc[i]["date"].strftime("%b %d")
             for i in range(0, len(df1), 7)
         ]
         axis.set_xticklabels(xlabels)
-        artists = (texts, lines, axis)
         anim = FuncAnimation(
             fig,
             self.next_frame,
             frames=np.arange(INTERPOLATIONS * frame_count),
-            fargs=[artists, fit_points, most_current_day, frame_count, df1],
+            fargs=[axis, fit_points, most_current_day, frame_count, df1],
             interval=200,
             repeat=True,
             repeat_delay=2000)
@@ -400,12 +390,17 @@ class CumulativeCases(Plot):
             print("Prediction {}: {}".format(
                 frame, int(self.data['fit_{}'.format(observation_day)].max())))
 
-    def next_frame(self, i, artists, fit_points, most_current_day, frame_count,
+    def next_frame(self, i, axis, fit_points, most_current_day, frame_count,
                    data):
         """
         Function called from animator to generate frame i of the animation.
         """
-        (texts, lines, axis) = artists
+        #(texts, lines, axis) = artists
+        texts = [
+            child for child in axis.get_children()
+            if isinstance(child, mpl.text.Text)
+        ]
+        lines = axis.get_lines()
         interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
         observation_day = most_current_day - frame_count + int(
             i / INTERPOLATIONS) + 1
