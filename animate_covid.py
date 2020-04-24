@@ -8,14 +8,14 @@ Epidemiological Data from the COVID-19 Outbreak in Canada.
 https://github.com/ishaberry/Covid19Canada.
 """
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Imports
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 import argparse
 import os.path
 import datetime
 # import configparser
-# import logging
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -27,26 +27,30 @@ import pandas as pd
 import requests
 from scipy.optimize import curve_fit
 
-#-------------------------------------------------------------------------------
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)-15s %(levelname)-8s%(message)s')
+
+# -------------------------------------------------------------------------------
 # Parameters
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
 START_DAYS_OFFSET = 10
-FIT_POINTS = 7
+FIT_POINTS = 12
 FETCH_ALWAYS = False
 FRAME_COUNT = 32
 YSCALE = "linear"  # "linear", "log", "symlog", "logit",
 INTERPOLATIONS = 5
+SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
-# IMAGEMAGICK_EXE = "/Program Files/ImageMagick-7.0.9-Q16/magick.exe"
-IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
+IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
+# IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
 # For ImageMagick configuration, see
 # https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Set up graphics
-#-------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 plt.style.use("ggplot")
 mpl.rcParams['figure.figsize'] = [7.0, 4.0]
 mpl.rcParams['figure.dpi'] = 90
@@ -60,9 +64,9 @@ sns.set()
 sns.set_palette("muted")
 
 
-#-------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Functions
-#-------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 def get_df(fetch=FETCH_ALWAYS):
     """
     Download data from the COVID-19 Canada Open Data Working Group.
@@ -149,7 +153,7 @@ class GrowthRate(Plot):
                                mu_1 * growth_rate[quotient + 1])
         return interpolated
 
-    def smooth(self, unsmoothed, degree=7):
+    def smooth(self, unsmoothed, degree=SMOOTHING_DAYS):
         """
         Smooth the values in self.data[column], returning a list,
         Taken from
@@ -169,7 +173,7 @@ class GrowthRate(Plot):
             try:
                 smoothed[i] = sum(
                     np.array(unsmoothed[i:i + window]) * weight) / sum(weight)
-            except:
+            except ZeroDivisionError:
                 smoothed[i] = float("NaN")
         return smoothed
 
@@ -324,6 +328,12 @@ class CumulativeCases(Plot):
                              repeat_delay=2000)
         super().output(anim, plt, self.plot_type, self.save_output)
 
+    def poly_fit(self, x_var, a_factor, b_factor, c_intercept):
+        """
+        Fitting function for curve fitting (below)
+        """
+        return a_factor * x_var**2 + b_factor * x_var + c_intercept
+
     def exp_fit(self, x_var, a_factor, k_exponent, b_intercept):
         """
         Fitting function for curve fitting (below)
@@ -334,6 +344,7 @@ class CumulativeCases(Plot):
         """
         Fit a line through the observations in the data frame
         """
+        fit_type = "poly"
         x_list = self.data["day"].iloc[observation_day -
                                        self.fit_points:observation_day + 1]
         y_list = self.data["cumulative"].iloc[observation_day -
@@ -343,17 +354,32 @@ class CumulativeCases(Plot):
         norm_y = y_list.max()
         x_normalized = x_list - norm_x + 1
         y_normalized = y_list / norm_y
-        #print(x, y, x_normalized, y_normalized)
+        # print(x, y, x_normalized, y_normalized)
         # feed it into scipy, method is one of ‘lm’, ‘trf’, ‘dogbox’}
-        popt, pcov = curve_fit(self.exp_fit,
-                               x_normalized,
-                               y_normalized,
-                               method="trf",
-                               p0=popt,
-                               maxfev=10000)
-        return popt, pcov
+        popt_exp, pcov_exp = curve_fit(self.exp_fit,
+                                       x_normalized,
+                                       y_normalized,
+                                       p0=popt,
+                                       maxfev=10000)
+        logging.info(" *** EXPONENTIAL *** ")
+        logging.info(pcov_exp)
+        popt_poly, pcov_poly = curve_fit(
+            self.poly_fit,
+            x_normalized,
+            y_normalized,
+            # p0=popt,
+            maxfev=10000)
+        logging.info(" *** POLYNOMIAL *** ")
+        logging.info(pcov_poly)
+        if fit_type == "exp":
+            popt = popt_exp
+            pcov = pcov_exp
+        elif fit_type == "poly":
+            popt = popt_poly
+            pcov = pcov_poly
+        return fit_type, popt, pcov
 
-    def add_series_from_fit(self, popt, observation_day):
+    def add_series_from_fit(self, popt, observation_day, fit_type="exp"):
         """
         Given a fitted function for a given observation day,
         use it to add a column to the dataframe "data" with
@@ -362,9 +388,14 @@ class CumulativeCases(Plot):
         norm_x = self.data["day"].loc[observation_day - self.fit_points:].min()
         norm_y = self.data["cumulative"].loc[observation_day - self.
                                              fit_points:observation_day].max()
-        for day in range(len(self.data)):
-            self.data.loc[day, "fit_{}".format(observation_day)] = \
-                    int(self.exp_fit((day - norm_x + 1), *popt) * norm_y)
+        if fit_type == "exp":
+            for day in range(len(self.data)):
+                self.data.loc[day, "fit_{}".format(observation_day)] = \
+                        int(self.exp_fit((day - norm_x + 1), *popt) * norm_y)
+        elif fit_type == "poly":
+            for day in range(len(self.data)):
+                self.data.loc[day, "fit_{}".format(observation_day)] = \
+                        int(self.poly_fit((day - norm_x + 1), *popt) * norm_y)
 
     def double_time(self, data, observation_date):
         """
@@ -389,8 +420,11 @@ class CumulativeCases(Plot):
         popt = (3, 0.01, -6)
         for frame in range(self.frame_count):
             observation_day = most_current_day - self.frame_count + frame + 1
-            popt, pcov = self.fit_trends(popt, observation_day=observation_day)
-            self.add_series_from_fit(popt, observation_day=observation_day)
+            fit_type, popt, pcov = self.fit_trends(
+                popt, observation_day=observation_day)
+            self.add_series_from_fit(popt,
+                                     observation_day=observation_day,
+                                     fit_type=fit_type)
             print("Prediction {}: {}".format(
                 frame, int(self.data['fit_{}'.format(observation_day)].max())))
 
@@ -398,7 +432,7 @@ class CumulativeCases(Plot):
         """
         Function called from animator to generate frame i of the animation.
         """
-        #(texts, lines, axis) = artists
+        # (texts, lines, axis) = artists
         texts = [
             child for child in axis.get_children()
             if isinstance(child, mpl.text.Text)
@@ -477,7 +511,7 @@ def main():
     Entry point.
     """
     args = parse_args()
-    config = read_config(args)
+    # config = read_config(args)
     data = get_df()
     if args.plot == "cases":
         CumulativeCases(data, args.save)
