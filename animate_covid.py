@@ -41,7 +41,7 @@ FIT_POINTS = 12
 FETCH_ALWAYS = False
 FRAME_COUNT = 32
 YSCALE = "linear"  # "linear", "log", "symlog", "logit",
-INTERPOLATIONS = 10
+INTERPOLATIONS = 5
 SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
 # IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
@@ -174,7 +174,7 @@ class GrowthRate(Plot):
             try:
                 smoothed[i] = sum(
                     np.array(unsmoothed[i:i + window]) * weight) / sum(weight)
-            except ZeroDivisionError:
+            except ValueError:
                 smoothed[i] = float("NaN")
         return smoothed
 
