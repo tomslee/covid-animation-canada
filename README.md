@@ -35,18 +35,12 @@ To display an animated graph of growth rate:
 
 To save the graph in a gif or mp4 file in the current directory instead of displaying it
 
-> python animate_covid.py -p <plot_type> --save [gif] mp4
+> python animate_covid.py -p <plot_type> -s [gif] | mp4
 
 ## Output
 
 <video width="640" height="480" autoplay controls>
   <source src="covid_cases.mp4" type="video/mp4">
-  <source src="movie.ogg" type="video/ogg">
-  Your browser does not support the video tag.
-</video>
-
-<video width="640" height="480" autoplay controls>
-  <source src="covid_growth.mp4" type="video/mp4">
   <source src="movie.ogg" type="video/ogg">
   Your browser does not support the video tag.
 </video>
