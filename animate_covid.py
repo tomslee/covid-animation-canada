@@ -36,15 +36,16 @@ logging.basicConfig(level=logging.INFO,
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
 START_DAYS_OFFSET = 10
+FIT_TYPE = "exp"  # "exp" or "poly"
 FIT_POINTS = 12
 FETCH_ALWAYS = False
 FRAME_COUNT = 32
 YSCALE = "linear"  # "linear", "log", "symlog", "logit",
-INTERPOLATIONS = 5
+INTERPOLATIONS = 10
 SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
-IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
-# IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
+# IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
+IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
 # For ImageMagick configuration, see
 # https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
 
@@ -97,7 +98,7 @@ class Plot():
     def output(self, anim, plt, plot_type, save_output):
         filename = "covid_{}.{}".format(plot_type, save_output)
         if save_output == "mp4":
-            writer = FFMpegFileWriter(fps=20, bitrate=1800)
+            writer = FFMpegFileWriter(fps=10, bitrate=1800)
             anim.save(filename, writer=writer)
         elif save_output == "gif":
             writer = ImageMagickFileWriter()
@@ -298,7 +299,12 @@ class CumulativeCases(Plot):
         else:
             axis.set_ylim(bottom=0, top=df1["cumulative"].max() * 1.5)
         axis.plot(df1["day"], df1["cumulative"], "o", markersize=8, alpha=0.8)
-        axis.plot(df1["day"], df1["cumulative"], "-", lw=2, alpha=0.8)
+        axis.plot(df1["day"],
+                  df1["cumulative"],
+                  "o",
+                  markersize=8,
+                  color=sns.color_palette()[0],
+                  alpha=0.4)
         axis.text(
             0.025,
             0.96,
@@ -344,7 +350,7 @@ class CumulativeCases(Plot):
         """
         Fit a line through the observations in the data frame
         """
-        fit_type = "poly"
+        fit_type = FIT_TYPE
         x_list = self.data["day"].iloc[observation_day -
                                        self.fit_points:observation_day + 1]
         y_list = self.data["cumulative"].iloc[observation_day -
@@ -361,16 +367,16 @@ class CumulativeCases(Plot):
                                        y_normalized,
                                        p0=popt,
                                        maxfev=10000)
-        logging.info(" *** EXPONENTIAL *** ")
-        logging.info(pcov_exp)
+        # logging.info(" *** EXPONENTIAL *** ")
+        # logging.info(pcov_exp)
         popt_poly, pcov_poly = curve_fit(
             self.poly_fit,
             x_normalized,
             y_normalized,
             # p0=popt,
             maxfev=10000)
-        logging.info(" *** POLYNOMIAL *** ")
-        logging.info(pcov_poly)
+        # logging.info(" *** POLYNOMIAL *** ")
+        # logging.info(pcov_poly)
         if fit_type == "exp":
             popt = popt_exp
             pcov = pcov_exp
@@ -444,7 +450,8 @@ class CumulativeCases(Plot):
         observation_date = data[data["day"] == observation_day].iloc[0]["date"]
         expected_current_value = round(
             int(data["fit_{}".format(observation_day)].max()), -3)
-        if interpolate != 0 and observation_day < most_current_day:  # interpolate
+        if interpolate != 0 and observation_day < most_current_day:
+            # Between to data points. Interpolate
             yfit_lower = data["fit_{}".format(observation_day)].to_list()
             yfit_upper = data["fit_{}".format(observation_day + 1)].to_list()
             yfit = [
@@ -462,10 +469,15 @@ class CumulativeCases(Plot):
                  data["date"].max().strftime("%b %d"))))
         texts[0].set_text(caption)
         yobs = data["cumulative"].to_list()
-        # Set yobs to None for day > observation_day
+        # Set yobs to None for day > observation_day and yfit to None for day
+        # <= observation_day
         yobs = [
             yobs[i] if i <= (observation_day - data["day"].min()) else None
             for i in range(len(yobs))
+        ]
+        yfit = [
+            yfit[i] if i > (observation_day - data["day"].min()) else None
+            for i in range(len(yfit))
         ]
         lines[0].set_ydata(yobs)
         lines[1].set_ydata(yfit)
