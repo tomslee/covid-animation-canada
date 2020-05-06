@@ -107,6 +107,56 @@ class Plot():
             plt.show()
 
 
+class Provinces(Plot):
+    """
+    Plot an animated bar chart of the provinces totals
+    """
+    def __init__(self, data, save_output="", plot_type="bar"):
+        """
+        Initialize class variables and call what needs to be called.
+        """
+        self.plot_type = plot_type
+        self.data = data
+        self.save_output = save_output
+        self.prep()
+        self.plot()
+
+    def prep(self):
+        """
+        Take the raw dataframe and aggregate it so it can be used by this plot.
+        """
+        # as_index False yields three columns, like a SQL Group By
+        self.data = self.data[["date_report", "province"]]
+        # Add a column so we can use it for counts
+        self.data["count"] = 1
+        # Pivot the table on provinces, using the date as index
+        # so that there is a row for each date
+        self.data = pd.pivot_table(self.data,
+                                   values="count",
+                                   columns=["province"],
+                                   index="date_report",
+                                   fill_value=0,
+                                   aggfunc=np.size)
+        self.data.reset_index(inplace=True)
+        self.data.rename(columns={"date_report": "date"}, inplace=True)
+        self.data["date"] = [x.date() for x in self.data["date"]]
+        self.data["day"] = self.data.index
+        print(self.data.tail())
+
+    def plot(self):
+        """
+        First go
+        """
+        self.data.plot()
+        # fig = plt.figure()
+        # initial plot
+        plt.xlabel("Date")
+        plt.ylabel("Cases")
+        plt.title("Work in progress")
+        plt.yscale(YSCALE)
+        plt.show()
+
+
 class GrowthRate(Plot):
     """
     Plot the percentage change in daily new cases
@@ -281,6 +331,7 @@ class CumulativeCases(Plot):
         Plot the trend of cumulative cases, observed at
         earlier days, evolving over time.
         """
+
         most_current_day = self.data["day"].max()
         self.multifit(most_current_day)
         start_day = self.data["day"].min() + START_DAYS_OFFSET
@@ -529,6 +580,8 @@ def main():
         CumulativeCases(data, args.save)
     elif args.plot == "growth":
         GrowthRate(data, args.save)
+    elif args.plot == "provinces":
+        Provinces(data, args.save)
     else:
         print("Unknown plot choice: {}".format(args.plot))
 
