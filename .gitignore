@@ -1,2 +1,5 @@
 *.swp
 *.html
+*.db3
+*.yapf
+*.xlsx

@@ -12,6 +12,7 @@ https://github.com/ishaberry/Covid19Canada.
 # Imports
 # -------------------------------------------------------------------------------
 import argparse
+import os
 import os.path
 import datetime
 # import configparser
@@ -25,6 +26,7 @@ from matplotlib.animation import ImageMagickFileWriter, FFMpegFileWriter
 import seaborn as sns
 import pandas as pd
 import requests
+import sqlite3
 from scipy.optimize import curve_fit
 
 logging.basicConfig(level=logging.INFO,
@@ -38,9 +40,9 @@ DAYS_ANNOTATE = 6
 START_DAYS_OFFSET = 10
 FIT_TYPE = "exp"  # "exp" or "poly"
 FIT_POINTS = 12
-FETCH_ALWAYS = False
-FRAME_COUNT = 32
-YSCALE = "linear"  # "linear", "log", "symlog", "logit",
+DOWNLOAD_ALWAYS = False
+FRAME_COUNT = 42
+YSCALE_TYPE = "linear"  # "linear", "log", "symlog", "logit",
 INTERPOLATIONS = 5
 SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
@@ -68,25 +70,46 @@ sns.set_palette("muted")
 # ------------------------------------------------------------------------------
 # Functions
 # ------------------------------------------------------------------------------
-def get_df(fetch=FETCH_ALWAYS):
+def download_data(download_always=DOWNLOAD_ALWAYS):
     """
     Download data from the COVID-19 Canada Open Data Working Group.
-    Only download once a day (unless FETCH_ALWAYS is set) to avoid
+    Only download once a day (unless DOWNLOAD_ALWAYS is set) to avoid
     unnecessary refetching of the same data.
+
+    Returns True if a download was performed, False otherwise
     """
     url = ("https://docs.google.com/spreadsheets/d/"
            "1D6okqtBS3S2NRC7GFVHzaZ67DuTw7LX49-fqSLwJyeo/export?format=xlsx")
-    update_time = datetime.date.fromtimestamp(os.path.getmtime("canada.xlsx"))
-    if fetch or datetime.date.today() != update_time:
-        print("Fetching spreadsheet")
+    if os.path.exists("canada.xlsx"):
+        update_time = datetime.date.fromtimestamp(
+            os.path.getmtime("canada.xlsx"))
+    else:
+        update_time = None
+    if download_always or datetime.date.today() != update_time:
+        logging.info("Downloading spreadsheet...")
         response = requests.get(url)
         with open("canada.xlsx", "wb") as output:
             output.write(response.content)
-    df_download = pd.read_excel("canada.xlsx",
-                                sheet_name="Cases",
-                                skiprows=range(0, 3),
-                                index_col=0)
-    return df_download
+        return True
+    else:
+        return False
+
+
+def xls_to_db3():
+    """
+    Read the spreadsheet and store in a database
+    """
+    if os.path.exists("canada.db3"):
+        os.remove("canada.db3")
+    dbconn = sqlite3.connect("canada.db3")
+    for sheet in ["Cases"]:
+        logging.info(f"Reading spreadsheet sheet {sheet}...")
+        df = pd.read_excel("canada.xlsx",
+                           sheet_name=sheet,
+                           skiprows=range(0, 3),
+                           index_col=0)
+        logging.info(f"Writing spreadsheet sheet {sheet} into sqlite table...")
+        df.to_sql(sheet, dbconn, index=True)
 
 
 class Plot():
@@ -95,7 +118,18 @@ class Plot():
     There's nothing here yet, but it will probably fill up as more plots
     are added
     """
+
+    def __init__(self):
+        """
+        Generic instantiation
+        """
+        self.dbconn = sqlite3.connect("canada.db3")
+
     def output(self, anim, plt, plot_type, save_output):
+        """
+        Generic output functions
+        """
+        logging.info("Writing output...")
         filename = "covid_{}.{}".format(plot_type, save_output)
         if save_output == "mp4":
             writer = FFMpegFileWriter(fps=10, bitrate=1800)
@@ -111,13 +145,16 @@ class Provinces(Plot):
     """
     Plot an animated bar chart of the provinces totals
     """
+
     def __init__(self, data, save_output="", plot_type="bar"):
         """
         Initialize class variables and call what needs to be called.
         """
+        super().__init__()
         self.plot_type = plot_type
         self.data = data
         self.save_output = save_output
+        self.provinces = []
         self.prep()
         self.plot()
 
@@ -126,6 +163,7 @@ class Provinces(Plot):
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
         # as_index False yields three columns, like a SQL Group By
+        self.provinces = self.data["province"].unique()
         self.data = self.data[["date_report", "province"]]
         # Add a column so we can use it for counts
         self.data["count"] = 1
@@ -141,32 +179,77 @@ class Provinces(Plot):
         self.data.rename(columns={"date_report": "date"}, inplace=True)
         self.data["date"] = [x.date() for x in self.data["date"]]
         self.data["day"] = self.data.index
-        print(self.data.tail())
 
     def plot(self):
         """
         First go
         """
-        self.data.plot()
-        # fig = plt.figure()
+        fig = plt.figure()
         # initial plot
         plt.xlabel("Date")
         plt.ylabel("Cases")
         plt.title("Work in progress")
-        plt.yscale(YSCALE)
-        plt.show()
+        plt.yscale(YSCALE_TYPE)
+        axis = plt.gca()
+        for province in self.provinces:
+            axis.plot(self.data["day"],
+                      self.data[province],
+                      "-",
+                      lw=3,
+                      alpha=0.8)
+        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        axis.set_xlim(left=min(self.data["days"]),
+                      right=max(self.data["days"]))
+        xlabels = [
+            self.data.iloc[i]["date"].strftime("%b %d")
+            for i in range(0, len(self.data), 7)
+        ]
+        axis.set_xticklabels(xlabels)
+        anim = FuncAnimation(fig,
+                             self.next_frame,
+                             frames=np.arange(len(self.data)),
+                             fargs=[axis],
+                             interval=50,
+                             repeat=True,
+                             repeat_delay=1500,
+                             save_count=1500)
+        super().output(anim, plt, self.plot_type, self.save_output)
 
 
 class GrowthRate(Plot):
     """
     Plot the percentage change in daily new cases
     """
-    def __init__(self, data, save_output="", plot_type="growth"):
+
+    def __init__(self, save_output="", plot_type="growth"):
         """
         Initialize class variables and call what needs to be called.
         """
+        super().__init__()
         self.plot_type = plot_type
-        self.data = data
+        # The query uses ROW_NUMBER -1 to start at zero.
+        # This matches dataframe behaviour
+        sql = """
+        SELECT "date", "new_cases", "day", "cumulative"
+        , (100.0 * "new_cases"/(LAG("cumulative", 1, 0) OVER (ORDER BY
+        "date")))
+        as "growth_rate"
+        FROM
+            ( SELECT "date"
+            , "new_cases"
+            , ROW_NUMBER() OVER (ORDER BY "date") -1 as "day"
+            , SUM("new_cases") OVER
+            (ORDER BY "date" RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+            as "cumulative"
+            FROM (
+                SELECT date_report as "date"
+                , count(*) as "new_cases"
+                FROM Cases
+                GROUP BY date_report
+            ) T1
+        ) T2
+        """
+        self.data = pd.read_sql(sql, self.dbconn)
         self.save_output = save_output
         self.prep()
         growth_rate_list = self.data["growth_rate"].to_list()
@@ -178,18 +261,19 @@ class GrowthRate(Plot):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
-        self.data = self.data["date_report"].to_frame().groupby(
-            "date_report").apply(lambda x: x.count())
-        self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
-        self.data.reset_index(inplace=True)
-        self.data.rename(columns={"date_report": "date"}, inplace=True)
-        self.data["date"] = [x.date() for x in self.data["date"]]
-        self.data["day"] = self.data.index
-        self.data["cumulative"] = self.data["new_cases"].to_frame().expanding(
-            1).sum()
-        self.data["cumulative_shift1"] = self.data["cumulative"].shift(1)
-        self.data["growth_rate"] = 100 * (self.data["new_cases"] /
-                                          self.data["cumulative_shift1"])
+        # self.data = self.data["date_report"].to_frame().groupby(
+        # "date_report").apply(lambda x: x.count())
+        # self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
+        # self.data.reset_index(inplace=True)
+        # self.data.rename(columns={"date_report": "date"}, inplace=True)
+        logging.info(self.data.tail())
+        self.data["date"] = [
+            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
+            for x in self.data["date"]
+        ]
+        # self.data["cumulative_shift1"] = self.data["cumulative"].shift(1)
+        # self.data["growth_rate"] = 100 * (self.data["new_cases"] /
+        # self.data["cumulative_shift1"])
 
     def interpolate(self, growth_rate):
         """
@@ -242,12 +326,12 @@ class GrowthRate(Plot):
         plt.xlabel("Date")
         plt.ylabel("Percentage increase")
         plt.title("Covid-19 daily percentage increase in cases")
-        plt.yscale(YSCALE)
+        plt.yscale(YSCALE_TYPE)
         axis = plt.gca()
         axis.plot(days, growth_rate, "-", lw=3, alpha=0.8)
         axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
         axis.set_xlim(left=min(days), right=max(days))
-        if YSCALE == "log":
+        if YSCALE_TYPE == "log":
             axis.set_ylim(bottom=1, top=1.1 * np.nanmax(growth_rate))
         else:
             axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
@@ -261,7 +345,7 @@ class GrowthRate(Plot):
                              frames=np.arange(len(days)),
                              fargs=[axis, growth_rate],
                              interval=50,
-                             repeat=True,
+                             repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
         super().output(anim, plt, self.plot_type, self.save_output)
@@ -281,8 +365,8 @@ class CumulativeCases(Plot):
     """
     Plot cumulative cases
     """
+
     def __init__(self,
-                 data,
                  save_output="",
                  plot_type="cases",
                  frame_count=FRAME_COUNT,
@@ -293,7 +377,24 @@ class CumulativeCases(Plot):
         It must have the following columns:
         - "date_report": the date a case is reported
         """
-        self.data = data
+        super().__init__()
+        # The query uses ROW_NUMBER -1 to start at zero.
+        # This matches dataframe behaviour
+        sql = """
+        SELECT "date"
+        , "new_cases"
+        , ROW_NUMBER() OVER (ORDER BY "date") -1 as "day"
+        , SUM("new_cases") OVER
+        (ORDER BY "date" RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        as "cumulative"
+        FROM (
+            SELECT date_report as "date"
+            , count(*) as "new_cases"
+            FROM Cases
+            GROUP BY date_report
+        ) T1
+        """
+        self.data = pd.read_sql(sql, self.dbconn)
         self.save_output = save_output
         self.frame_count = frame_count
         self.plot_type = plot_type
@@ -306,17 +407,22 @@ class CumulativeCases(Plot):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
-        self.data = self.data["date_report"].to_frame().groupby(
-            "date_report").apply(lambda x: x.count())
-        # df_agg has an index named date_report and a single column, named
-        # date_report. Fix this up to give a default index and a column "new_cases"
-        self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
-        self.data.reset_index(inplace=True)
-        self.data.rename(columns={"date_report": "date"}, inplace=True)
-        self.data["date"] = [x.date() for x in self.data["date"]]
-        self.data["day"] = self.data.index
-        self.data["cumulative"] = self.data["new_cases"].to_frame().expanding(
-            1).sum()
+        # self.data = self.data["date_report"].to_frame().groupby(
+        # "date_report").apply(lambda x: x.count())
+        # self.data has an index named date_report and a single column, named
+        # date_report.
+        # Fix this up to give a default index and a column "new_cases"
+        # self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
+        # self.data.reset_index(inplace=True)
+        # self.data.rename(columns={"date_report": "date"}, inplace=True)
+        self.data["date"] = [
+            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
+            for x in self.data["date"]
+        ]
+        # self.data["day"] = self.data.index
+        # self.data["cumulative"] =
+        # self.data["new_cases"].to_frame().expanding(
+        # 1).sum()
 
     def smooth(self):
         self.data["shift1"] = self.data["cumulative"].shift(1)
@@ -341,11 +447,11 @@ class CumulativeCases(Plot):
         fig = plt.figure()
         plt.xlabel("Date")
         plt.ylabel("Cumulative cases")
-        plt.title("Flattening the curve in Canada")
+        plt.title("Predicting the present: Covid cases in Canada")
         axis = plt.gca()
-        plt.yscale(YSCALE)
+        plt.yscale(YSCALE_TYPE)
         axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
-        if YSCALE == "log":
+        if YSCALE_TYPE == "log":
             axis.set_ylim(bottom=10, top=df1["cumulative"].max() * 1.5)
         else:
             axis.set_ylim(bottom=0, top=df1["cumulative"].max() * 1.5)
@@ -482,8 +588,9 @@ class CumulativeCases(Plot):
             self.add_series_from_fit(popt,
                                      observation_day=observation_day,
                                      fit_type=fit_type)
-            print("Prediction {}: {}".format(
-                frame, int(self.data['fit_{}'.format(observation_day)].max())))
+            # pred_value = \
+            # int(self.data['fit_{}'.format(observation_day)].max())
+            # logging.info(f"Prediction {frame}: {pred_value}")
 
     def next_frame(self, i, axis, most_current_day, data):
         """
@@ -573,15 +680,17 @@ def main():
     """
     Entry point.
     """
+    logging.info("Starting...")
     args = parse_args()
     # config = read_config(args)
-    data = get_df()
+    if download_data():
+        xls_to_db3()
     if args.plot == "cases":
-        CumulativeCases(data, args.save)
+        CumulativeCases(args.save)
     elif args.plot == "growth":
-        GrowthRate(data, args.save)
+        GrowthRate(args.save)
     elif args.plot == "provinces":
-        Provinces(data, args.save)
+        Provinces(args.save)
     else:
         print("Unknown plot choice: {}".format(args.plot))
 
