@@ -146,15 +146,37 @@ class Provinces(Plot):
     Plot an animated bar chart of the provinces totals
     """
 
-    def __init__(self, data, save_output="", plot_type="bar"):
+    def __init__(self, save_output=None, plot_type="provinces"):
         """
         Initialize class variables and call what needs to be called.
         """
         super().__init__()
         self.plot_type = plot_type
-        self.data = data
+        sql = """
+        SELECT date_report, province
+        FROM Cases
+        """
+        self.data = pd.read_sql(sql, self.dbconn)
         self.save_output = save_output
         self.provinces = []
+        # Populations from
+        # https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1710000901
+        self.population = {
+            "NL": 521365,
+            "PEI": 158158,
+            "Nova Scotia": 977457,
+            "New Brunswick": 779993,
+            "Quebec": 8537674,
+            "Ontario": 14711827,
+            "Manitoba": 1377517,
+            "Saskatchewan": 1181666,
+            "Alberta": 4413146,
+            "BC": 5110917,
+            "Yukon": 41078,
+            "NWT": 44904,
+            "Nunavut": 39097,
+            "Repatriated": 10000000,
+        }
         self.prep()
         self.plot()
 
@@ -177,7 +199,13 @@ class Provinces(Plot):
                                    aggfunc=np.size)
         self.data.reset_index(inplace=True)
         self.data.rename(columns={"date_report": "date"}, inplace=True)
-        self.data["date"] = [x.date() for x in self.data["date"]]
+        self.data["date"] = [
+            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
+            for x in self.data["date"]
+        ]
+        for province in self.provinces:
+            self.data[province] = 1000000.0 * (self.data[province] /
+                                               self.population[province])
         self.data["day"] = self.data.index
 
     def plot(self):
@@ -187,8 +215,9 @@ class Provinces(Plot):
         fig = plt.figure()
         # initial plot
         plt.xlabel("Date")
-        plt.ylabel("Cases")
+        plt.ylabel("Cases per million population")
         plt.title("Work in progress")
+        plt.xticks(rotation=45)
         plt.yscale(YSCALE_TYPE)
         axis = plt.gca()
         for province in self.provinces:
@@ -197,9 +226,9 @@ class Provinces(Plot):
                       "-",
                       lw=3,
                       alpha=0.8)
+        axis.legend()
         axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        axis.set_xlim(left=min(self.data["days"]),
-                      right=max(self.data["days"]))
+        axis.set_xlim(left=min(self.data["day"]), right=max(self.data["day"]))
         xlabels = [
             self.data.iloc[i]["date"].strftime("%b %d")
             for i in range(0, len(self.data), 7)
@@ -210,10 +239,23 @@ class Provinces(Plot):
                              frames=np.arange(len(self.data)),
                              fargs=[axis],
                              interval=50,
-                             repeat=True,
+                             repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
         super().output(anim, plt, self.plot_type, self.save_output)
+
+    def next_frame(self, i, axis):
+        """
+        Function called from animator to generate frame i of the animation
+        """
+        province_index = -1
+        for province in self.provinces:
+            province_index += 1
+            y_values = self.data[province].to_list().copy()
+            for j, _ in enumerate(y_values):
+                if j > i:
+                    y_values[j] = None
+            axis.get_lines()[province_index].set_ydata(y_values)
 
 
 class GrowthRate(Plot):
