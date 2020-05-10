@@ -28,6 +28,7 @@ import pandas as pd
 import requests
 import sqlite3
 from scipy.optimize import curve_fit
+import bar_chart_race as bcr
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s %(levelname)-8s%(message)s')
@@ -178,7 +179,7 @@ class Provinces(Plot):
             "Repatriated": 10000000,
         }
         self.prep()
-        self.plot()
+        self.plot_bcr()
 
     def prep(self):
         """
@@ -197,6 +198,11 @@ class Provinces(Plot):
                                    index="date_report",
                                    fill_value=0,
                                    aggfunc=np.size)
+        # For cumulative data rather than daily totals, replace the
+        # values in each column with cumulative totals using "expanding"
+        for province in self.provinces:
+            self.data[province] = self.data[province].to_frame().expanding(
+                1).sum()
         self.data.reset_index(inplace=True)
         self.data.rename(columns={"date_report": "date"}, inplace=True)
         self.data["date"] = [
@@ -208,54 +214,73 @@ class Provinces(Plot):
                                                self.population[province])
         self.data["day"] = self.data.index
 
+    def plot_bcr(self):
+        """
+        Use the bar_chart_race package to do the plot
+        """
+        logging.info("Bar Chart Race...")
+        # fig, ax = plt.subplots(figsize=(4, 2.5), dpi=144)
+        fig, ax = plt.subplots()
+        columns = ["date"]
+        columns.extend(self.provinces)
+        df = self.data[columns]
+        df.set_index("date", inplace=True)
+        # logging.info(df.tail())
+        bcr.bar_chart_race(
+            df=df,
+            filename='covid_provinces.mp4',
+            orientation='h',
+            sort='desc',
+            label_bars=True,
+            use_index=True,
+            steps_per_period=10,
+            period_length=500,
+            figsize=(6.5, 3.5),
+            cmap='dark24',
+            title='Covid-19 Cases Per Million in Canadian Provinces',
+            bar_label_size=7,
+            tick_label_size=3,
+            period_label_size=12,
+            fig=fig)
+
     def plot(self):
         """
-        First go
+        Set up the arrays and figure, and call FuncAnimation
         """
-        fig = plt.figure()
-        # initial plot
-        plt.xlabel("Date")
-        plt.ylabel("Cases per million population")
+        fig, axis = plt.subplots()
         plt.title("Work in progress")
-        plt.xticks(rotation=45)
-        plt.yscale(YSCALE_TYPE)
-        axis = plt.gca()
-        for province in self.provinces:
-            axis.plot(self.data["day"],
-                      self.data[province],
-                      "-",
-                      lw=3,
-                      alpha=0.8)
-        axis.legend()
-        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        axis.set_xlim(left=min(self.data["day"]), right=max(self.data["day"]))
-        xlabels = [
-            self.data.iloc[i]["date"].strftime("%b %d")
-            for i in range(0, len(self.data), 7)
-        ]
-        axis.set_xticklabels(xlabels)
+        # plt.xlabel("Cases per million")
+        df_plot = self.data[self.provinces]
+        color_dict = dict([(p,
+                            sns.color_palette()[x % len(sns.color_palette())])
+                           for x, p in enumerate(self.provinces)])
         anim = FuncAnimation(fig,
-                             self.next_frame,
-                             frames=np.arange(len(self.data)),
-                             fargs=[axis],
-                             interval=50,
+                             self.plot_frame,
+                             frames=range(len(self.data)),
+                             fargs=[axis, df_plot, color_dict],
+                             interval=500,
                              repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
         super().output(anim, plt, self.plot_type, self.save_output)
 
-    def next_frame(self, i, axis):
+    def plot_frame(self, i, axis, df_plot, color_dict):
         """
         Function called from animator to generate frame i of the animation
         """
-        province_index = -1
-        for province in self.provinces:
-            province_index += 1
-            y_values = self.data[province].to_list().copy()
-            for j, _ in enumerate(y_values):
-                if j > i:
-                    y_values[j] = None
-            axis.get_lines()[province_index].set_ydata(y_values)
+        axis.clear()
+        series = df_plot.iloc[i].sort_values(ascending=True).tail(5)
+        colors = [color_dict[x] for x in series.index]
+        # logging.info(series)
+        axis.barh(series.index, series, color=colors)
+        axis.text(1,
+                  0.2,
+                  self.data.iloc[i]["date"].strftime("%b %d"),
+                  transform=axis.transAxes,
+                  color='#777777',
+                  size=24,
+                  ha='right',
+                  weight=800)
 
 
 class GrowthRate(Plot):

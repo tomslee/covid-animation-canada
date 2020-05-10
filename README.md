@@ -37,6 +37,14 @@ To save the graph in a gif or mp4 file in the current directory instead of displ
 
 > python animate_covid.py -p <plot_type> -s [gif] | mp4
 
+## Bar Chart races
+
+There are several blog posts about implementing bar chart races in matplotlib.
+
+- A basic outline is by [Pratap Vardhan](https://towardsdatascience.com/bar-chart-race-in-python-with-matplotlib-8e687a5c8a41)
+- Slightly smoother, from [Data Science Coffee](https://www.datasciencecoffee.com/2020-smooth-bar-chart-race/)
+- The most advanced, with properly smooth transitions, is by [Ted Petrou](https://medium.com/dunder-data/create-a-bar-chart-race-animation-in-python-with-matplotlib-477ed1590096)on May 4 (last week!). It is accompanied by a package put on [GitHub](https://github.com/dexplo/bar_chart_race).
+
 ## Output
 
 <video width="640" height="480" autoplay controls>
