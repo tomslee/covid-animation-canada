@@ -93,7 +93,10 @@ def download_data(download_always=DOWNLOAD_ALWAYS):
             output.write(response.content)
         return True
     else:
-        return False
+        if os.path.exists("canada.db3"):
+            return False
+        else:
+            return True
 
 
 def xls_to_db3():
@@ -103,7 +106,7 @@ def xls_to_db3():
     if os.path.exists("canada.db3"):
         os.remove("canada.db3")
     dbconn = sqlite3.connect("canada.db3")
-    for sheet in ["Cases"]:
+    for sheet in ["Cases", "Recovered"]:
         logging.info(f"Reading spreadsheet sheet {sheet}...")
         df = pd.read_excel("canada.xlsx",
                            sheet_name=sheet,
@@ -120,45 +123,46 @@ class Plot():
     are added
     """
 
-    def __init__(self):
-        """
-        Generic instantiation
-        """
-        self.dbconn = sqlite3.connect("canada.db3")
-
-    def output(self, anim, plt, plot_type, save_output):
+    def output(self, anim, plt, plot_type, output):
         """
         Generic output functions
         """
         logging.info("Writing output...")
-        filename = "covid_{}.{}".format(plot_type, save_output)
-        if save_output == "mp4":
+        filename = "covid_{}.{}".format(plot_type, output)
+        if output == "mp4":
             writer = FFMpegFileWriter(fps=10, bitrate=1800)
             anim.save(filename, writer=writer)
-        elif save_output == "gif":
+        elif output == "gif":
             writer = ImageMagickFileWriter()
             anim.save(filename, writer=writer)
         else:
             plt.show()
 
 
-class Provinces(Plot):
+class DataSet():
+    """
+    The data set to plot.
+    """
+
+    def __init__(self):
+        """
+        Generic instantiation
+        """
+        self.dbconn = sqlite3.connect("canada.db3")
+
+
+class Provinces(DataSet):
     """
     Plot an animated bar chart of the provinces totals
     """
 
-    def __init__(self, save_output=None, plot_type="provinces"):
+    def __init__(self, output=None, plot_type="provinces"):
         """
         Initialize class variables and call what needs to be called.
         """
         super().__init__()
         self.plot_type = plot_type
-        sql = """
-        SELECT date_report, province
-        FROM Cases
-        """
-        self.data = pd.read_sql(sql, self.dbconn)
-        self.save_output = save_output
+        self.output = output
         self.provinces = []
         # Populations from
         # https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1710000901
@@ -178,54 +182,89 @@ class Provinces(Plot):
             "Nunavut": 39097,
             "Repatriated": 10000000,
         }
-        self.prep()
-        self.plot_bcr()
+        df = self.prep()
+        self.plot_bcr(df)
 
     def prep(self):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
         # as_index False yields three columns, like a SQL Group By
-        self.provinces = self.data["province"].unique()
-        self.data = self.data[["date_report", "province"]]
-        # Add a column so we can use it for counts
-        self.data["count"] = 1
+        sql_cases = """
+        SELECT date_report, province, 1 as cases
+        FROM Cases
+        """
+        df_cases = pd.read_sql(sql_cases, self.dbconn)
+        sql_recovered = """
+        SELECT date_recovered, province, cumulative_recovered
+        FROM Recovered
+        """
+        df_recovered = pd.read_sql(sql_recovered, self.dbconn)
+        self.provinces = df_cases["province"].unique()
+        # df_cases = df_cases[["date_report", "province"]]
         # Pivot the table on provinces, using the date as index
         # so that there is a row for each date
-        self.data = pd.pivot_table(self.data,
-                                   values="count",
-                                   columns=["province"],
-                                   index="date_report",
-                                   fill_value=0,
-                                   aggfunc=np.size)
+        df_cases = pd.pivot_table(df_cases,
+                                  values="cases",
+                                  columns=["province"],
+                                  index="date_report",
+                                  fill_value=0,
+                                  aggfunc=np.size)
+        df_recovered = pd.pivot_table(df_recovered,
+                                      values="cumulative_recovered",
+                                      columns=["province"],
+                                      index="date_recovered",
+                                      fill_value=0,
+                                      aggfunc=np.max)
+        print("df_cases")
+        print(df_cases["Alberta"].tail())
+        print("df_recovered")
+        print(df_recovered.tail())
         # For cumulative data rather than daily totals, replace the
         # values in each column with cumulative totals using "expanding"
         for province in self.provinces:
-            self.data[province] = self.data[province].to_frame().expanding(
+            df_cases[province] = df_cases[province].to_frame().expanding(
                 1).sum()
-        self.data.reset_index(inplace=True)
-        self.data.rename(columns={"date_report": "date"}, inplace=True)
-        self.data["date"] = [
-            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
-            for x in self.data["date"]
-        ]
+        # join using dates (indexes)
+        df_join = df_cases.join(df_recovered,
+                                lsuffix='_cases',
+                                rsuffix='_recovered')
         for province in self.provinces:
-            self.data[province] = 1000000.0 * (self.data[province] /
-                                               self.population[province])
-        self.data["day"] = self.data.index
+            df_join[province] = df_join[f"{province}_cases"] - df_join[
+                f"{province}_recovered"]
+        df_join.reset_index(inplace=True)
+        df_join.rename(columns={"date_report": "date"}, inplace=True)
+        df_join["date"] = [
+            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
+            for x in df_join["date"]
+        ]
+        print("df_join")
+        print(df_join.tail())
+        # df_cases.reset_index(inplace=True)
+        # df_cases.rename(columns={"date_report": "date"}, inplace=True)
+        # df_cases["date"] = [
+        # datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
+        # for x in df_cases["date"]
+        # ]
+        # for province in self.provinces:
+        # df_cases[province] = 1000000.0 * (df_cases[province] /
+        # self.population[province])
+        # df_cases["day"] = df_cases.index
+        # return df_cases
+        columns = ["date"]
+        columns.extend(self.provinces)
+        df_join = df_join[columns]
+        df_join = df_join.fillna(0)
+        df_join.set_index("date", inplace=True)
+        return df_join
 
-    def plot_bcr(self):
+    def plot_bcr(self, df):
         """
         Use the bar_chart_race package to do the plot
         """
         logging.info("Bar Chart Race...")
         # fig, ax = plt.subplots(figsize=(4, 2.5), dpi=144)
         fig, ax = plt.subplots()
-        columns = ["date"]
-        columns.extend(self.provinces)
-        df = self.data[columns]
-        df.set_index("date", inplace=True)
-        # logging.info(df.tail())
         bcr.bar_chart_race(
             df=df,
             filename='covid_provinces.mp4',
@@ -243,7 +282,7 @@ class Provinces(Plot):
             period_label_size=12,
             fig=fig)
 
-    def plot(self):
+    def plot_manual(self):
         """
         Set up the arrays and figure, and call FuncAnimation
         """
@@ -262,7 +301,7 @@ class Provinces(Plot):
                              repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
-        super().output(anim, plt, self.plot_type, self.save_output)
+        super().output(anim, plt, self.plot_type, self.output)
 
     def plot_frame(self, i, axis, df_plot, color_dict):
         """
@@ -283,12 +322,12 @@ class Provinces(Plot):
                   weight=800)
 
 
-class GrowthRate(Plot):
+class GrowthRate(DataSet):
     """
     Plot the percentage change in daily new cases
     """
 
-    def __init__(self, save_output="", plot_type="growth"):
+    def __init__(self, output="", plot_type="growth"):
         """
         Initialize class variables and call what needs to be called.
         """
@@ -317,7 +356,7 @@ class GrowthRate(Plot):
         ) T2
         """
         self.data = pd.read_sql(sql, self.dbconn)
-        self.save_output = save_output
+        self.output = output
         self.prep()
         growth_rate_list = self.data["growth_rate"].to_list()
         growth_rate_list = self.interpolate(growth_rate_list)
@@ -415,7 +454,7 @@ class GrowthRate(Plot):
                              repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
-        super().output(anim, plt, self.plot_type, self.save_output)
+        Plot().output(anim, plt, self.plot_type, self.output)
 
     def next_frame(self, i, axis, growth_rate):
         """
@@ -428,13 +467,13 @@ class GrowthRate(Plot):
         axis.get_lines()[0].set_ydata(y_values)
 
 
-class CumulativeCases(Plot):
+class CumulativeCases(DataSet):
     """
     Plot cumulative cases
     """
 
     def __init__(self,
-                 save_output="",
+                 output="",
                  plot_type="cases",
                  frame_count=FRAME_COUNT,
                  fit_points=FIT_POINTS):
@@ -462,7 +501,7 @@ class CumulativeCases(Plot):
         ) T1
         """
         self.data = pd.read_sql(sql, self.dbconn)
-        self.save_output = save_output
+        self.output = output
         self.frame_count = frame_count
         self.plot_type = plot_type
         self.fit_points = fit_points
@@ -556,7 +595,7 @@ class CumulativeCases(Plot):
                              interval=200,
                              repeat=True,
                              repeat_delay=2000)
-        super().output(anim, plt, self.plot_type, self.save_output)
+        Plot().output(anim, plt, self.plot_type, self.output)
 
     def poly_fit(self, x_var, a_factor, b_factor, c_intercept):
         """
@@ -716,21 +755,22 @@ def parse_args():
                                      usage="%(prog)s [options]",
                                      fromfile_prefix_chars='@')
     parser.add_argument(
-        "-s",
-        "--save",
-        metavar="save",
+        "-o",
+        "--output",
+        metavar="output",
         action="store",
         type=str,
         default="",
-        help="save the animation as a file; [gif] or mp4",
+        help="output the animation to the window or as a file; [gif] or mp4",
     )
-    parser.add_argument("-p",
-                        "--plot",
-                        metavar="plot",
-                        action="store",
-                        type=str,
-                        default="cases",
-                        help="statistic to plot; [cases] or growth")
+    parser.add_argument(
+        "-d",
+        "--dataset",
+        metavar="dataset",
+        action="store",
+        type=str,
+        default="cases",
+        help="data set to plot; [cases] or growth or provinces")
     args = parser.parse_args()
     return args
 
@@ -752,14 +792,14 @@ def main():
     # config = read_config(args)
     if download_data():
         xls_to_db3()
-    if args.plot == "cases":
-        CumulativeCases(args.save)
-    elif args.plot == "growth":
-        GrowthRate(args.save)
-    elif args.plot == "provinces":
-        Provinces(args.save)
+    if args.dataset == "cases":
+        CumulativeCases(args.output)
+    elif args.dataset == "growth":
+        GrowthRate(args.output)
+    elif args.dataset == "provinces":
+        Provinces(args.output)
     else:
-        print("Unknown plot choice: {}".format(args.plot))
+        print("Unknown dataset: {}".format(args.plot))
 
 
 if __name__ == '__main__':
