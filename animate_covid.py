@@ -123,12 +123,12 @@ class Plot():
     are added
     """
 
-    def output(self, anim, plt, plot_type, output):
+    def output(self, anim, plt, dataset, output):
         """
         Generic output functions
         """
         logging.info("Writing output...")
-        filename = "covid_{}.{}".format(plot_type, output)
+        filename = "covid_{}.{}".format(dataset.lower(), output)
         if output == "mp4":
             writer = FFMpegFileWriter(fps=10, bitrate=1800)
             anim.save(filename, writer=writer)
@@ -145,10 +145,67 @@ class DataSet():
     """
 
     def __init__(self):
-        """
-        Generic instantiation
-        """
         self.dbconn = sqlite3.connect("canada.db3")
+        self.population = {
+            "NL": 521365,
+            "PEI": 158158,
+            "Nova Scotia": 977457,
+            "New Brunswick": 779993,
+            "Quebec": 8537674,
+            "Ontario": 14711827,
+            "Manitoba": 1377517,
+            "Saskatchewan": 1181666,
+            "Alberta": 4413146,
+            "BC": 5110917,
+            "Yukon": 41078,
+            "NWT": 44904,
+            "Nunavut": 39097,
+            "Repatriated": 10000000,
+        }
+
+    def interpolate(self, df):
+        """
+        Interpolate INTERPOLATIONS between every row in df
+        Taking from
+        https://medium.com/dunder-data/create-a-bar-chart-race-animation-in-python-with-matplotlib-477ed1590096
+        This method assumes df has an index with dates in it, called "date"
+        This function just repeats the date entry, which is fine when it is
+        just used as a label in a bar chart race. However, in a line chart
+        animation the result is a series of vertical lines at the repeating 
+        date in the index.
+        """
+        # Make the index an incrementing integer starting at zero
+        # The existing index gets turned into a column
+        df = df.reset_index()
+        # Multiply each index by INTERPOLATIONS
+        df.index = df.index * INTERPOLATIONS
+        # reindex to add additional rows in between
+        max_index = df.index[-1] + 1
+        df = df.reindex(range(max_index))
+        # If there is a column called "date" fill in with the last known value
+        df["date"] = df["date"].fillna(method="ffill")
+        # Now use the date column as index again
+        df = df.set_index("date")
+        # rank each row
+        df_rank = df.rank(axis=1, method="first")
+        # interpolate missing values in df and df_rank
+        df = df.interpolate()
+        df_rank = df_rank.interpolate()
+        print("\nIn interpolate")
+        print(df.tail(INTERPOLATIONS + 1))
+        return df, df_rank
+
+    def smooth(self, df, degree=SMOOTHING_DAYS):
+        """
+        Use the pandas "rolling" method
+        """
+        for column in df.columns:
+            df[column] = df[column].rolling(SMOOTHING_DAYS,
+                                            win_type="gaussian",
+                                            center=True).mean(std=2)
+        print("\nIn smooth")
+        print(df.tail(INTERPOLATIONS + 1))
+        return df
 
 
 class Provinces(DataSet):
@@ -166,24 +223,9 @@ class Provinces(DataSet):
         self.provinces = []
         # Populations from
         # https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1710000901
-        self.population = {
-            "NL": 521365,
-            "PEI": 158158,
-            "Nova Scotia": 977457,
-            "New Brunswick": 779993,
-            "Quebec": 8537674,
-            "Ontario": 14711827,
-            "Manitoba": 1377517,
-            "Saskatchewan": 1181666,
-            "Alberta": 4413146,
-            "BC": 5110917,
-            "Yukon": 41078,
-            "NWT": 44904,
-            "Nunavut": 39097,
-            "Repatriated": 10000000,
-        }
         df = self.prep()
-        self.plot_bcr(df)
+        # self.plot_bcr(df)
+        self.plot_manual(df)
 
     def prep(self):
         """
@@ -263,7 +305,6 @@ class Provinces(DataSet):
         Use the bar_chart_race package to do the plot
         """
         logging.info("Bar Chart Race...")
-        # fig, ax = plt.subplots(figsize=(4, 2.5), dpi=144)
         fig, ax = plt.subplots()
         bcr.bar_chart_race(
             df=df,
@@ -275,51 +316,52 @@ class Provinces(DataSet):
             steps_per_period=10,
             period_length=500,
             figsize=(6.5, 3.5),
-            cmap='dark24',
+            # cmap="dark24",
+            cmap=sns.color_palette(),
             title='Covid-19 Cases Per Million in Canadian Provinces',
             bar_label_size=7,
             tick_label_size=3,
             period_label_size=12,
             fig=fig)
 
-    def plot_manual(self):
+    def plot_manual(self, df):
         """
         Set up the arrays and figure, and call FuncAnimation
         """
-        fig, axis = plt.subplots()
+        logging.info("Manual Bar Chart Race...")
+        fig, ax = plt.subplots()
         plt.title("Work in progress")
         # plt.xlabel("Cases per million")
-        df_plot = self.data[self.provinces]
         color_dict = dict([(p,
                             sns.color_palette()[x % len(sns.color_palette())])
                            for x, p in enumerate(self.provinces)])
         anim = FuncAnimation(fig,
                              self.plot_frame,
-                             frames=range(len(self.data)),
-                             fargs=[axis, df_plot, color_dict],
+                             frames=range(len(df)),
+                             fargs=[ax, df, color_dict],
                              interval=500,
                              repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
-        super().output(anim, plt, self.plot_type, self.output)
+        Plot().output(anim, plt, self.__class__.__name__, self.output)
 
-    def plot_frame(self, i, axis, df_plot, color_dict):
+    def plot_frame(self, i, ax, df, color_dict):
         """
         Function called from animator to generate frame i of the animation
         """
-        axis.clear()
-        series = df_plot.iloc[i].sort_values(ascending=True).tail(5)
+        ax.clear()
+        series = df.iloc[i].sort_values(ascending=True).tail(5)
         colors = [color_dict[x] for x in series.index]
         # logging.info(series)
-        axis.barh(series.index, series, color=colors)
-        axis.text(1,
-                  0.2,
-                  self.data.iloc[i]["date"].strftime("%b %d"),
-                  transform=axis.transAxes,
-                  color='#777777',
-                  size=24,
-                  ha='right',
-                  weight=800)
+        ax.barh(series.index, series, color=colors)
+        ax.text(1,
+                0.2,
+                df.index[i].strftime("%b %d"),
+                transform=ax.transAxes,
+                color='#777777',
+                size=24,
+                ha='right',
+                weight=800)
 
 
 class GrowthRate(DataSet):
@@ -336,7 +378,7 @@ class GrowthRate(DataSet):
         # The query uses ROW_NUMBER -1 to start at zero.
         # This matches dataframe behaviour
         sql = """
-        SELECT "date", "new_cases", "day", "cumulative"
+        SELECT "date", "new_cases", "cumulative"
         , (100.0 * "new_cases"/(LAG("cumulative", 1, 0) OVER (ORDER BY
         "date")))
         as "growth_rate"
@@ -355,51 +397,37 @@ class GrowthRate(DataSet):
             ) T1
         ) T2
         """
-        self.data = pd.read_sql(sql, self.dbconn)
+        df = pd.read_sql(sql, self.dbconn, index_col="date")
+        df = df.fillna(0.0)
+        print("In init")
+        print(df.tail())
         self.output = output
-        self.prep()
-        growth_rate_list = self.data["growth_rate"].to_list()
-        growth_rate_list = self.interpolate(growth_rate_list)
-        growth_rate_list = self.smooth(growth_rate_list)
-        self.plot(growth_rate_list)
+        # df = self.prep(df)
+        df, df_rank = self.interpolate(df)
+        df = self.smooth(df)
+        self.plot(df["growth_rate"])
 
-    def prep(self):
+    def prep(self, df):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
-        # self.data = self.data["date_report"].to_frame().groupby(
-        # "date_report").apply(lambda x: x.count())
-        # self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
-        # self.data.reset_index(inplace=True)
-        # self.data.rename(columns={"date_report": "date"}, inplace=True)
-        logging.info(self.data.tail())
-        self.data["date"] = [
+        logging.info(df.tail())
+        df["date"] = [
             datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
-            for x in self.data["date"]
+            for x in df["date"]
         ]
-        # self.data["cumulative_shift1"] = self.data["cumulative"].shift(1)
-        # self.data["growth_rate"] = 100 * (self.data["new_cases"] /
-        # self.data["cumulative_shift1"])
+        print("\nIn prep")
+        print(df.tail())
 
-    def interpolate(self, growth_rate):
+    def smooth_manual(self, df, degree=SMOOTHING_DAYS):
         """
-        Interpolate INTERPOLATIONS between every pair in growth_rate
-        """
-        new_length = (len(growth_rate) - 1) * INTERPOLATIONS
-        interpolated = [0.0] * new_length
-        for i in range(new_length):
-            quotient = int(i / INTERPOLATIONS)
-            mu_1 = (i % INTERPOLATIONS) / INTERPOLATIONS
-            interpolated[i] = ((1 - mu_1) * growth_rate[quotient] +
-                               mu_1 * growth_rate[quotient + 1])
-        return interpolated
-
-    def smooth(self, unsmoothed, degree=SMOOTHING_DAYS):
-        """
-        Smooth the values in self.data[column], returning a list,
+        Smooth the values in df
         Taken from
         https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
+
+        df has a date index. All columns are numeric.
         """
+        # Compute the weights
         window = degree * 2 - 1
         weight = np.array([1.0] * window)
         weight_gauss = []
@@ -409,62 +437,88 @@ class GrowthRate(DataSet):
             gauss = 1 / (np.exp((4 * frac)**2))
             weight_gauss.append(gauss)
         weight = np.array(weight_gauss) * weight
-        smoothed = [0.0] * len(unsmoothed)
-        for i, _ in enumerate(smoothed):
-            try:
-                smoothed[i] = sum(
-                    np.array(unsmoothed[i:i + window]) * weight) / sum(weight)
-            except ValueError:
-                smoothed[i] = float("NaN")
-        return smoothed
+        for column in df.columns:
+            unsmoothed = df[column].to_list()
+            smoothed = [0.0] * (len(df) - window)
+            for i, _ in enumerate(smoothed):
+                try:
+                    df[column][i] = sum(
+                        np.array(unsmoothed[i:i + window]) *
+                        weight) / sum(weight)
+                except ValueError as e:
+                    logging.error(e)
+                    df[column][i] = float("NaN")
+            # df[column] = smoothed
+        print("\nIn smooth")
+        print(df.tail())
+        return df
 
-    def plot(self, growth_rate):
+    def plot(self, df):
         """
-        Plot it
+        Plot it.
+
+        df has a date index. All columns are numeric.
         """
-        days = [i / INTERPOLATIONS for i in range(len(growth_rate))]
-        start_day = self.data["day"].min() + START_DAYS_OFFSET
-        df1 = self.data[self.data["day"] >= start_day].copy()
-        days = days[(START_DAYS_OFFSET * INTERPOLATIONS):]
-        growth_rate = growth_rate[(START_DAYS_OFFSET * INTERPOLATIONS):]
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+        print("\nIn plot")
+        print(df.tail())
+        fig, ax = plt.subplots()
+        # days = [i / INTERPOLATIONS for i in range(len(df))]
+        # start_day = self.data["day"].min() + START_DAYS_OFFSET
+        # df1 = self.data[self.data["day"] >= start_day].copy()
+        # days = days[(START_DAYS_OFFSET * INTERPOLATIONS):]
+        # growth_rate = growth_rate[(START_DAYS_OFFSET * INTERPOLATIONS):]
         # Initial plot
-        fig = plt.figure()
-        plt.xlabel("Date")
-        plt.ylabel("Percentage increase")
-        plt.title("Covid-19 daily percentage increase in cases")
-        plt.yscale(YSCALE_TYPE)
-        axis = plt.gca()
-        axis.plot(days, growth_rate, "-", lw=3, alpha=0.8)
-        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        axis.set_xlim(left=min(days), right=max(days))
-        if YSCALE_TYPE == "log":
-            axis.set_ylim(bottom=1, top=1.1 * np.nanmax(growth_rate))
-        else:
-            axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
-        xlabels = [
-            df1.iloc[i]["date"].strftime("%b %d")
-            for i in range(0, len(df1), 7)
-        ]
-        axis.set_xticklabels(xlabels)
+        # plt.xlabel("Date")
+        # plt.ylabel("Percentage increase")
+        # plt.title("Covid-19 daily percentage increase in cases")
+        # plt.yscale(YSCALE_TYPE)
+        # axis.plot(days, growth_rate, "-", lw=3, alpha=0.8)
+        # ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        # ax.set_xlim(left=min(df.index), right=max(df.index))
+        # if YSCALE_TYPE == "log":
+        # axis.set_ylim(bottom=1, top=1.1 * np.nanmax(growth_rate))
+        # else:
+        # axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
+        # xlabels = [
+        # df1.iloc[i]["date"].strftime("%b %d")
+        # for i in range(0, len(df1), 7)
+        # ]
+        # axis.set_xticklabels(xlabels)
         anim = FuncAnimation(fig,
                              self.next_frame,
-                             frames=np.arange(len(days)),
-                             fargs=[axis, growth_rate],
+                             frames=len(df),
+                             fargs=[ax, df],
                              interval=50,
                              repeat=False,
                              repeat_delay=1500,
                              save_count=1500)
-        Plot().output(anim, plt, self.plot_type, self.output)
+        Plot().output(anim, plt, self.__class__.__name__, self.output)
 
-    def next_frame(self, i, axis, growth_rate):
+    def next_frame(self, i, ax, df):
         """
         Function called from animator to generate frame i of the animation
         """
-        y_values = growth_rate.copy()
-        for j, _ in enumerate(y_values):
-            if j > i:
-                y_values[j] = None
-        axis.get_lines()[0].set_ydata(y_values)
+        # logging.info(f"Frame {i}:")
+        ax.clear()
+        for column in df.columns:
+            y = df[column].to_list()
+            # try:
+            #    y[i:] = [None] * (len(y) - i)
+            # except Exception as e:
+            # print(e)
+            for row in range(len(df)):
+                if row > i:
+                    y[row] = None
+            ax.plot(df.index, y)
+        ax.set_xlim(left=min(df.index), right=max(df.index))
+        ax.set_ylim(bottom=0, top=df.max().max())
+        ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        # xlabels = [
+        # df.index[j].strftime("%b %d") for j in range(0, len(df), 7)]
+        # ax.set_xticklabels(xlabels)
+        # ax.set_xticks([])
 
 
 class CumulativeCases(DataSet):
@@ -595,7 +649,7 @@ class CumulativeCases(DataSet):
                              interval=200,
                              repeat=True,
                              repeat_delay=2000)
-        Plot().output(anim, plt, self.plot_type, self.output)
+        Plot().output(anim, plt, self.__class__.__name__, self.output)
 
     def poly_fit(self, x_var, a_factor, b_factor, c_intercept):
         """
