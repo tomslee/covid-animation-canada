@@ -47,8 +47,8 @@ YSCALE_TYPE = "linear"  # "linear", "log", "symlog", "logit",
 INTERPOLATIONS = 5
 SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
-# IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
-IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
+IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
+# IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.10-Q16"
 # For ImageMagick configuration, see
 # https://stackoverflow.com/questions/23417487/saving-a-matplotlib-animation-with-imagemagick-and-without-ffmpeg-or-mencoder/42565258#42565258
 
@@ -122,7 +122,6 @@ class Plot():
     There's nothing here yet, but it will probably fill up as more plots
     are added
     """
-
     def output(self, anim, plt, dataset, output):
         """
         Generic output functions
@@ -143,7 +142,6 @@ class DataSet():
     """
     The data set to plot.
     """
-
     def __init__(self):
         self.dbconn = sqlite3.connect("canada.db3")
         self.population = {
@@ -166,9 +164,10 @@ class DataSet():
     def interpolate(self, df):
         """
         Interpolate INTERPOLATIONS between every row in df
+
         Taking from
         https://medium.com/dunder-data/create-a-bar-chart-race-animation-in-python-with-matplotlib-477ed1590096
-        This method assumes df has an index with dates in it, called "date"
+        This method assumes df has an index with dates in it, called "date".
         This function just repeats the date entry, which is fine when it is
         just used as a label in a bar chart race. However, in a line chart
         animation the result is a series of vertical lines at the repeating 
@@ -182,8 +181,10 @@ class DataSet():
         # reindex to add additional rows in between
         max_index = df.index[-1] + 1
         df = df.reindex(range(max_index))
-        # If there is a column called "date" fill in with the last known value
-        df["date"] = df["date"].fillna(method="ffill")
+        # Interpolate the date column using date_range
+        df["date"] = pd.date_range(start=df["date"].min(),
+                                   end=df["date"].max(),
+                                   periods=max_index)
         # Now use the date column as index again
         df = df.set_index("date")
         # rank each row
@@ -191,8 +192,8 @@ class DataSet():
         # interpolate missing values in df and df_rank
         df = df.interpolate()
         df_rank = df_rank.interpolate()
-        print("\nIn interpolate")
-        print(df.tail(INTERPOLATIONS + 1))
+        # print("\nIn interpolate")
+        # print(df.tail(INTERPOLATIONS + 1))
         return df, df_rank
 
     def smooth(self, df, degree=SMOOTHING_DAYS):
@@ -207,12 +208,44 @@ class DataSet():
         print(df.tail(INTERPOLATIONS + 1))
         return df
 
+    def smooth_manual(self, df, degree=SMOOTHING_DAYS):
+        """
+        Smooth the values in df
+        Taken from
+        https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
+        df has a date index. All columns are numeric.
+        """
+        # Compute the weights
+        window = degree * 2 - 1
+        weight = np.array([1.0] * window)
+        weight_gauss = []
+        for i in range(window):
+            i = i - degree + 1
+            frac = i / float(window)
+            gauss = 1 / (np.exp((4 * frac)**2))
+            weight_gauss.append(gauss)
+        weight = np.array(weight_gauss) * weight
+        for column in df.columns:
+            unsmoothed = df[column].to_list()
+            smoothed = [0.0] * (len(df) - window)
+            for i, _ in enumerate(smoothed):
+                try:
+                    df[column][i] = sum(
+                        np.array(unsmoothed[i:i + window]) *
+                        weight) / sum(weight)
+                except ValueError as e:
+                    logging.error(e)
+                    df[column][i] = float("NaN")
+            # df[column] = smoothed
+        print("\nIn smooth")
+        print(df.tail())
+        return df
+
 
 class Provinces(DataSet):
     """
     Plot an animated bar chart of the provinces totals
     """
-
     def __init__(self, output=None, plot_type="provinces"):
         """
         Initialize class variables and call what needs to be called.
@@ -223,11 +256,11 @@ class Provinces(DataSet):
         self.provinces = []
         # Populations from
         # https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1710000901
-        df = self.prep()
-        # self.plot_bcr(df)
-        self.plot_manual(df)
+        df = self._prep()
+        self.plot_bcr(df)
+        # self.plot_manual(df)
 
-    def prep(self):
+    def _prep(self):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
@@ -236,12 +269,22 @@ class Provinces(DataSet):
         SELECT date_report, province, 1 as cases
         FROM Cases
         """
-        df_cases = pd.read_sql(sql_cases, self.dbconn)
+        df_cases = pd.read_sql(
+            sql_cases,
+            self.dbconn,
+            parse_dates={"date_report": {
+                "format": "%Y-%m-%d %H:%M:%S"
+            }})
         sql_recovered = """
         SELECT date_recovered, province, cumulative_recovered
         FROM Recovered
         """
-        df_recovered = pd.read_sql(sql_recovered, self.dbconn)
+        df_recovered = pd.read_sql(
+            sql_recovered,
+            self.dbconn,
+            parse_dates={"date_report": {
+                "format": "%Y-%m-%d %H:%M:%S"
+            }})
         self.provinces = df_cases["province"].unique()
         # df_cases = df_cases[["date_report", "province"]]
         # Pivot the table on provinces, using the date as index
@@ -276,10 +319,6 @@ class Provinces(DataSet):
                 f"{province}_recovered"]
         df_join.reset_index(inplace=True)
         df_join.rename(columns={"date_report": "date"}, inplace=True)
-        df_join["date"] = [
-            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
-            for x in df_join["date"]
-        ]
         print("df_join")
         print(df_join.tail())
         # df_cases.reset_index(inplace=True)
@@ -368,7 +407,6 @@ class GrowthRate(DataSet):
     """
     Plot the percentage change in daily new cases
     """
-
     def __init__(self, output="", plot_type="growth"):
         """
         Initialize class variables and call what needs to be called.
@@ -378,6 +416,8 @@ class GrowthRate(DataSet):
         # The query uses ROW_NUMBER -1 to start at zero.
         # This matches dataframe behaviour
         sql = """
+        SELECT "date", "growth_rate" FROM
+        (
         SELECT "date", "new_cases", "cumulative"
         , (100.0 * "new_cases"/(LAG("cumulative", 1, 0) OVER (ORDER BY
         "date")))
@@ -396,62 +436,22 @@ class GrowthRate(DataSet):
                 GROUP BY date_report
             ) T1
         ) T2
+        ) T3
         """
-        df = pd.read_sql(sql, self.dbconn, index_col="date")
+        df = pd.read_sql(sql,
+                         self.dbconn,
+                         index_col="date",
+                         parse_dates={"date": {
+                             "format": "%Y-%m-%d %H:%M:%S"
+                         }})
         df = df.fillna(0.0)
         print("In init")
         print(df.tail())
+        print(df.dtypes)
         self.output = output
-        # df = self.prep(df)
         df, df_rank = self.interpolate(df)
         df = self.smooth(df)
-        self.plot(df["growth_rate"])
-
-    def prep(self, df):
-        """
-        Take the raw dataframe and aggregate it so it can be used by this plot.
-        """
-        logging.info(df.tail())
-        df["date"] = [
-            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
-            for x in df["date"]
-        ]
-        print("\nIn prep")
-        print(df.tail())
-
-    def smooth_manual(self, df, degree=SMOOTHING_DAYS):
-        """
-        Smooth the values in df
-        Taken from
-        https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
-
-        df has a date index. All columns are numeric.
-        """
-        # Compute the weights
-        window = degree * 2 - 1
-        weight = np.array([1.0] * window)
-        weight_gauss = []
-        for i in range(window):
-            i = i - degree + 1
-            frac = i / float(window)
-            gauss = 1 / (np.exp((4 * frac)**2))
-            weight_gauss.append(gauss)
-        weight = np.array(weight_gauss) * weight
-        for column in df.columns:
-            unsmoothed = df[column].to_list()
-            smoothed = [0.0] * (len(df) - window)
-            for i, _ in enumerate(smoothed):
-                try:
-                    df[column][i] = sum(
-                        np.array(unsmoothed[i:i + window]) *
-                        weight) / sum(weight)
-                except ValueError as e:
-                    logging.error(e)
-                    df[column][i] = float("NaN")
-            # df[column] = smoothed
-        print("\nIn smooth")
-        print(df.tail())
-        return df
+        self.plot(df)
 
     def plot(self, df):
         """
@@ -515,17 +515,12 @@ class GrowthRate(DataSet):
         ax.set_xlim(left=min(df.index), right=max(df.index))
         ax.set_ylim(bottom=0, top=df.max().max())
         ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        # xlabels = [
-        # df.index[j].strftime("%b %d") for j in range(0, len(df), 7)]
-        # ax.set_xticklabels(xlabels)
-        # ax.set_xticks([])
 
 
 class CumulativeCases(DataSet):
     """
     Plot cumulative cases
     """
-
     def __init__(self,
                  output="",
                  plot_type="cases",
@@ -554,16 +549,21 @@ class CumulativeCases(DataSet):
             GROUP BY date_report
         ) T1
         """
-        self.data = pd.read_sql(sql, self.dbconn)
+        self.data = pd.read_sql(
+            sql,
+            self.dbconn,
+            parse_dates={"date": {
+                "format": "%Y-%m-%d %H:%M:%S"
+            }})
         self.output = output
         self.frame_count = frame_count
         self.plot_type = plot_type
         self.fit_points = fit_points
-        self.prep()
+        self._prep()
         self.smooth()
         self.plot()
 
-    def prep(self):
+    def _prep(self):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
@@ -575,10 +575,6 @@ class CumulativeCases(DataSet):
         # self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
         # self.data.reset_index(inplace=True)
         # self.data.rename(columns={"date_report": "date"}, inplace=True)
-        self.data["date"] = [
-            datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
-            for x in self.data["date"]
-        ]
         # self.data["day"] = self.data.index
         # self.data["cumulative"] =
         # self.data["new_cases"].to_frame().expanding(
