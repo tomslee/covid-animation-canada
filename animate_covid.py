@@ -47,7 +47,7 @@ FIT_POINTS = 12
 DOWNLOAD_ALWAYS = False
 FRAME_COUNT = 42
 YSCALE_TYPE = "linear"  # "linear", "log", "symlog", "logit",
-INTERPOLATIONS = 5
+INTERPOLATIONS = 3
 SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
 IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
@@ -216,6 +216,8 @@ class DataSet():
 
     def smooth_manual(self, df, degree=SMOOTHING_DAYS):
         """
+        DEPRECATED: now use built-in dataframe rolling method, above.
+        Keeping this just in case it is useful.
         Smooth the values in df
         Taken from
         https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
@@ -455,6 +457,7 @@ class GrowthRate(DataSet):
         print(df.tail())
         print(df.dtypes)
         self.output = output
+        # Interpolate before smoothing!
         df, df_rank = self.interpolate(df)
         df = self.smooth(df)
         self.plot(df)
@@ -467,34 +470,7 @@ class GrowthRate(DataSet):
         """
         if isinstance(df, pd.Series):
             df = df.to_frame()
-        print("\nIn plot")
-        print(df.tail())
         fig, ax = plt.subplots()
-        # rotates and right aligns the x labels, and moves the bottom of the
-        # axes up to make room for them
-        fig.autofmt_xdate()
-        # days = [i / INTERPOLATIONS for i in range(len(df))]
-        # start_day = self.data["day"].min() + START_DAYS_OFFSET
-        # df1 = self.data[self.data["day"] >= start_day].copy()
-        # days = days[(START_DAYS_OFFSET * INTERPOLATIONS):]
-        # growth_rate = growth_rate[(START_DAYS_OFFSET * INTERPOLATIONS):]
-        # Initial plot
-        # plt.xlabel("Date")
-        # plt.ylabel("Percentage increase")
-        # plt.title("Covid-19 daily percentage increase in cases")
-        # plt.yscale(YSCALE_TYPE)
-        # axis.plot(days, growth_rate, "-", lw=3, alpha=0.8)
-        # ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        # ax.set_xlim(left=min(df.index), right=max(df.index))
-        # if YSCALE_TYPE == "log":
-        # axis.set_ylim(bottom=1, top=1.1 * np.nanmax(growth_rate))
-        # else:
-        # axis.set_ylim(bottom=0, top=1.1 * np.nanmax(growth_rate))
-        # xlabels = [
-        # df1.iloc[i]["date"].strftime("%b %d")
-        # for i in range(0, len(df1), 7)
-        # ]
-        # axis.set_xticklabels(xlabels)
         anim = FuncAnimation(fig,
                              self.next_frame,
                              frames=len(df),
@@ -517,6 +493,7 @@ class GrowthRate(DataSet):
             ax.plot(df.index, y)
         ax.set_xlim(left=min(df.index), right=max(df.index))
         ax.set_ylim(bottom=0, top=df.max().max())
+        ax.set_ylabel("Percentage growth in total cases")
         locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
         formatter = mdates.ConciseDateFormatter(locator)
         ax.xaxis.set_major_locator(locator)
