@@ -465,7 +465,6 @@ class GrowthRate(DataSet):
     def plot(self, df):
         """
         Plot it.
-
         df has a date index. All columns are numeric.
         """
         if isinstance(df, pd.Series):
@@ -490,7 +489,7 @@ class GrowthRate(DataSet):
         for column in df.columns:
             y = df[column].to_list()
             y[(i + 1):] = [None] * (len(y) - i - 1)
-            ax.plot(df.index, y)
+            ax.plot(df.index, y, lw=4)
         ax.set_xlim(left=min(df.index), right=max(df.index))
         ax.set_ylim(bottom=0, top=df.max().max())
         ax.set_ylabel("Percentage growth in total cases")
