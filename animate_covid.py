@@ -23,6 +23,7 @@ import matplotlib.ticker as ticker
 import matplotlib as mpl
 from matplotlib.animation import FuncAnimation
 from matplotlib.animation import ImageMagickFileWriter, FFMpegFileWriter
+import matplotlib.dates as mdates
 import seaborn as sns
 import pandas as pd
 import requests
@@ -143,6 +144,9 @@ class DataSet():
     The data set to plot.
     """
     def __init__(self):
+        """
+        Generic dataset initializations
+        """
         self.dbconn = sqlite3.connect("canada.db3")
         self.population = {
             "NL": 521365,
@@ -204,8 +208,8 @@ class DataSet():
             df[column] = df[column].rolling(SMOOTHING_DAYS,
                                             win_type="gaussian",
                                             center=True).mean(std=2)
-        print("\nIn smooth")
-        print(df.tail(INTERPOLATIONS + 1))
+        # print("\nIn smooth")
+        # print(df.tail(INTERPOLATIONS + 1))
         return df
 
     def smooth_manual(self, df, degree=SMOOTHING_DAYS):
@@ -464,6 +468,9 @@ class GrowthRate(DataSet):
         print("\nIn plot")
         print(df.tail())
         fig, ax = plt.subplots()
+        # rotates and right aligns the x labels, and moves the bottom of the
+        # axes up to make room for them
+        fig.autofmt_xdate()
         # days = [i / INTERPOLATIONS for i in range(len(df))]
         # start_day = self.data["day"].min() + START_DAYS_OFFSET
         # df1 = self.data[self.data["day"] >= start_day].copy()
@@ -504,17 +511,14 @@ class GrowthRate(DataSet):
         ax.clear()
         for column in df.columns:
             y = df[column].to_list()
-            # try:
-            #    y[i:] = [None] * (len(y) - i)
-            # except Exception as e:
-            # print(e)
-            for row in range(len(df)):
-                if row > i:
-                    y[row] = None
+            y[(i + 1):] = [None] * (len(y) - i - 1)
             ax.plot(df.index, y)
         ax.set_xlim(left=min(df.index), right=max(df.index))
         ax.set_ylim(bottom=0, top=df.max().max())
-        ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
+        formatter = mdates.ConciseDateFormatter(locator)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
 
 
 class CumulativeCases(DataSet):
