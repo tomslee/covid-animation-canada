@@ -30,6 +30,8 @@ import requests
 import sqlite3
 from scipy.optimize import curve_fit
 import bar_chart_race as bcr
+from pandas.plotting import register_matplotlib_converters
+register_matplotlib_converters()
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s %(levelname)-8s%(message)s')
