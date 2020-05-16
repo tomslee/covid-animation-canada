@@ -19,7 +19,6 @@ import datetime
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import matplotlib as mpl
 from matplotlib.animation import FuncAnimation
 from matplotlib.animation import ImageMagickFileWriter, FFMpegFileWriter
@@ -41,9 +40,10 @@ logging.basicConfig(level=logging.INFO,
 # -------------------------------------------------------------------------------
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
-START_DAYS_OFFSET = 10
+START_DAYS_OFFSET = 0
 FIT_TYPE = "exp"  # "exp" or "poly"
-FIT_POINTS = 12
+FIT_POINTS = 7
+POPT_GUESS = (3, 0.01, -6)
 DOWNLOAD_ALWAYS = False
 FRAME_COUNT = 42
 YSCALE_TYPE = "linear"  # "linear", "log", "symlog", "logit",
@@ -194,25 +194,42 @@ class DataSet():
         # Now use the date column as index again
         df = df.set_index("date")
         # rank each row
-        df_rank = df.rank(axis=1, method="first")
+        df_rank = df.rank(ax=1, method="first")
         # interpolate missing values in df and df_rank
         df = df.interpolate()
         df_rank = df_rank.interpolate()
-        # print("\nIn interpolate")
-        # print(df.tail(INTERPOLATIONS + 1))
         return df, df_rank
 
-    def smooth(self, df, degree=SMOOTHING_DAYS):
+    def smooth(self,
+               df,
+               column_list="all",
+               degree=SMOOTHING_DAYS,
+               center=True):
         """
         Use the pandas "rolling" method
         """
-        for column in df.columns:
+        if column_list == "all":
+            column_list = df.columns.to_list()
+        for column in column_list:
             df[column] = df[column].rolling(SMOOTHING_DAYS,
                                             win_type="gaussian",
-                                            center=True).mean(std=2)
-        # print("\nIn smooth")
-        # print(df.tail(INTERPOLATIONS + 1))
+                                            center=center).mean(std=2)
+        df.fillna(method='ffill', inplace=True)
+        # values at the "top" of df may still be NaN
+        df.fillna(0, inplace=True)
         return df
+
+    def poly_fit(self, x_var, a_factor, b_factor, c_intercept):
+        """
+        Fitting function for curve fitting (below)
+        """
+        return a_factor * x_var**2 + b_factor * x_var + c_intercept
+
+    def exp_fit(self, x_var, a_factor, k_exponent, b_intercept):
+        """
+        Fitting function for curve fitting (below)
+        """
+        return a_factor * np.exp(x_var * k_exponent) + b_intercept
 
     def smooth_manual(self, df, degree=SMOOTHING_DAYS):
         """
@@ -484,7 +501,6 @@ class GrowthRate(DataSet):
         """
         Function called from animator to generate frame i of the animation
         """
-        # logging.info(f"Frame {i}:")
         ax.clear()
         for column in df.columns:
             y = df[column].to_list()
@@ -519,11 +535,11 @@ class CumulativeCases(DataSet):
         # This matches dataframe behaviour
         sql = """
         SELECT "date"
-        , "new_cases"
         , ROW_NUMBER() OVER (ORDER BY "date") -1 as "day"
         , SUM("new_cases") OVER
         (ORDER BY "date" RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
         as "cumulative"
+        , NULL as "trend"
         FROM (
             SELECT date_report as "date"
             , count(*) as "new_cases"
@@ -531,130 +547,40 @@ class CumulativeCases(DataSet):
             GROUP BY date_report
         ) T1
         """
-        self.data = pd.read_sql(
-            sql,
-            self.dbconn,
-            parse_dates={"date": {
-                "format": "%Y-%m-%d %H:%M:%S"
-            }})
+        df = pd.read_sql(sql,
+                         self.dbconn,
+                         index_col="date",
+                         parse_dates={"date": {
+                             "format": "%Y-%m-%d %H:%M:%S"
+                         }})
+        # df index is the date.
+        # df columns are "day", "cumulative", and "trend"
+        # "trend" is NULL, and will be filled in later
         self.output = output
         self.frame_count = frame_count
         self.plot_type = plot_type
         self.fit_points = fit_points
-        self._prep()
-        self.smooth()
-        self.plot()
+        df = df[df["day"] >= START_DAYS_OFFSET].copy()
+        df = self.smooth(df,
+                         column_list=["cumulative"],
+                         degree=3,
+                         center=False)
+        trend_lines = self.trend_lines(df)
+        self.plot(df, trend_lines)
 
-    def _prep(self):
-        """
-        Take the raw dataframe and aggregate it so it can be used by this plot.
-        """
-        # self.data = self.data["date_report"].to_frame().groupby(
-        # "date_report").apply(lambda x: x.count())
-        # self.data has an index named date_report and a single column, named
-        # date_report.
-        # Fix this up to give a default index and a column "new_cases"
-        # self.data.rename(columns={"date_report": "new_cases"}, inplace=True)
-        # self.data.reset_index(inplace=True)
-        # self.data.rename(columns={"date_report": "date"}, inplace=True)
-        # self.data["day"] = self.data.index
-        # self.data["cumulative"] =
-        # self.data["new_cases"].to_frame().expanding(
-        # 1).sum()
-
-    def smooth(self):
-        self.data["shift1"] = self.data["cumulative"].shift(1)
-        self.data["shift2"] = self.data["cumulative"].shift(2)
-        self.data["three_day_moving_average"] = (self.data["cumulative"] +
-                                                 self.data["shift1"] +
-                                                 self.data["shift2"]) / 3.0
-        self.data["cumulative"] = self.data["three_day_moving_average"]
-
-    def plot(self):
-        """
-        Plot the trend of cumulative cases, observed at
-        earlier days, evolving over time.
-        """
-
-        most_current_day = self.data["day"].max()
-        self.multifit(most_current_day)
-        start_day = self.data["day"].min() + START_DAYS_OFFSET
-        df1 = self.data[self.data["day"] >= start_day].copy()
-
-        # initial plot
-        fig = plt.figure()
-        plt.xlabel("Date")
-        plt.ylabel("Cumulative cases")
-        plt.title("Predicting the present: Covid cases in Canada")
-        axis = plt.gca()
-        plt.yscale(YSCALE_TYPE)
-        axis.set_xlim(left=df1["day"].min(), right=df1["day"].max())
-        if YSCALE_TYPE == "log":
-            axis.set_ylim(bottom=10, top=df1["cumulative"].max() * 1.5)
-        else:
-            axis.set_ylim(bottom=0, top=df1["cumulative"].max() * 1.5)
-        axis.plot(df1["day"], df1["cumulative"], "o", markersize=8, alpha=0.8)
-        axis.plot(df1["day"],
-                  df1["cumulative"],
-                  "o",
-                  markersize=8,
-                  color=sns.color_palette()[0],
-                  alpha=0.4)
-        axis.text(
-            0.025,
-            0.96,
-            "",
-            bbox={
-                "facecolor": "white",  # 'facecolor': sns.color_palette()[7],
-                'alpha': 0.8,
-                'pad': 8
-            },
-            verticalalignment="top",
-            transform=axis.transAxes,
-            fontsize=11,
-            alpha=0.8)
-        axis.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        xlabels = [
-            df1.iloc[i]["date"].strftime("%b %d")
-            for i in range(0, len(df1), 7)
-        ]
-        axis.set_xticklabels(xlabels)
-        anim = FuncAnimation(fig,
-                             self.next_frame,
-                             frames=np.arange(INTERPOLATIONS *
-                                              self.frame_count),
-                             fargs=[axis, most_current_day, df1],
-                             interval=200,
-                             repeat=True,
-                             repeat_delay=2000)
-        Plot().output(anim, plt, self.__class__.__name__, self.output)
-
-    def poly_fit(self, x_var, a_factor, b_factor, c_intercept):
-        """
-        Fitting function for curve fitting (below)
-        """
-        return a_factor * x_var**2 + b_factor * x_var + c_intercept
-
-    def exp_fit(self, x_var, a_factor, k_exponent, b_intercept):
-        """
-        Fitting function for curve fitting (below)
-        """
-        return a_factor * np.exp(x_var * k_exponent) + b_intercept
-
-    def fit_trends(self, popt, observation_day):
+    def fit_trends(self, df, x_col, y_col, popt=None, observation_day=None):
         """
         Fit a line through the observations in the data frame
         """
         fit_type = FIT_TYPE
-        x_list = self.data["day"].iloc[observation_day -
-                                       self.fit_points:observation_day + 1]
-        y_list = self.data["cumulative"].iloc[observation_day -
-                                              self.fit_points:observation_day +
-                                              1]
-        norm_x = x_list.min()
-        norm_y = y_list.max()
-        x_normalized = x_list - norm_x + 1
-        y_normalized = y_list / norm_y
+        fit_min = observation_day - self.fit_points
+        fit_max = observation_day
+        x = df[x_col].iloc[fit_min:fit_max]
+        y = df[y_col].iloc[fit_min:fit_max]
+        norm_x = x.min()
+        norm_y = y.max()
+        x_normalized = x - norm_x + 1
+        y_normalized = y / norm_y
         # print(x, y, x_normalized, y_normalized)
         # feed it into scipy, method is one of ‘lm’, ‘trf’, ‘dogbox’}
         popt_exp, pcov_exp = curve_fit(self.exp_fit,
@@ -662,41 +588,53 @@ class CumulativeCases(DataSet):
                                        y_normalized,
                                        p0=popt,
                                        maxfev=10000)
-        # logging.info(" *** EXPONENTIAL *** ")
-        # logging.info(pcov_exp)
-        popt_poly, pcov_poly = curve_fit(
-            self.poly_fit,
-            x_normalized,
-            y_normalized,
-            # p0=popt,
-            maxfev=10000)
+        # popt_poly, pcov_poly = curve_fit(
+        # self.poly_fit,
+        # x_normalized,
+        # y_normalized,
+        # # p0=popt,
+        # maxfev=10000)
         # logging.info(" *** POLYNOMIAL *** ")
         # logging.info(pcov_poly)
         if fit_type == "exp":
             popt = popt_exp
             pcov = pcov_exp
-        elif fit_type == "poly":
-            popt = popt_poly
-            pcov = pcov_poly
+        # elif fit_type == "poly":
+        # popt = popt_poly
+        # pcov = pcov_poly
         return fit_type, popt, pcov
 
-    def add_series_from_fit(self, popt, observation_day, fit_type="exp"):
+    def update_trend_column(self,
+                            df,
+                            x_col,
+                            y_col,
+                            trend_col,
+                            observation_day,
+                            popt,
+                            pcov,
+                            fit_type="exp"):
         """
-        Given a fitted function for a given observation day,
-        use it to add a column to the dataframe "data" with
+        Given a trend function for a given observation day,
+        use it to update a column of the dataframe "df" with
         values of that function for the whole data range.
         """
-        norm_x = self.data["day"].loc[observation_day - self.fit_points:].min()
-        norm_y = self.data["cumulative"].loc[observation_day - self.
-                                             fit_points:observation_day].max()
+        fit_min = observation_day - self.fit_points
+        fit_max = observation_day
+        norm_x = df[x_col].iloc[fit_min:].min()
+        norm_y = df[y_col].iloc[fit_min:fit_max - 1].max()
+        trend = [None] * len(df)
         if fit_type == "exp":
-            for day in range(len(self.data)):
-                self.data.loc[day, "fit_{}".format(observation_day)] = \
-                        int(self.exp_fit((day - norm_x + 1), *popt) * norm_y)
+            for day in range(len(df)):
+                # logging.info((f"Day {day}, trend length = {len(trend)},"
+                # f"df length = {len(df)}"))
+                trend[day] = int(
+                    self.exp_fit((day - norm_x + 1), *popt) * norm_y)
+            df["trend"] = trend
         elif fit_type == "poly":
-            for day in range(len(self.data)):
-                self.data.loc[day, "fit_{}".format(observation_day)] = \
-                        int(self.poly_fit((day - norm_x + 1), *popt) * norm_y)
+            for day in range(len(df)):
+                df.iloc[day]["trend"] = int(
+                    self.poly_fit((day - norm_x + 1), *popt) * norm_y)
+        return df
 
     def double_time(self, data, observation_date):
         """
@@ -713,66 +651,137 @@ class CumulativeCases(DataSet):
         print(x_0, x_1, x_half, y_0, y_1, y_half, obs_day, double_days)
         return double_days
 
-    def multifit(self, most_current_day):
+    def trend_lines(self, df):
         """
-        Call fit_trends and add_series_from_fit for each day, adding
+        Call fit_trends for each day, adding
         a column for each day's trend to the dataframe.
         """
-        popt = (3, 0.01, -6)
+        most_current_day = df["day"].max()
+        popt = POPT_GUESS
+        trend_lines = []
+        # for frame in range(self.frame_count):
         for frame in range(self.frame_count):
             observation_day = most_current_day - self.frame_count + frame + 1
+            logging.info((f"Observation day = {observation_day},"
+                          f"date={df.index.values[observation_day]}"))
             fit_type, popt, pcov = self.fit_trends(
-                popt, observation_day=observation_day)
-            self.add_series_from_fit(popt,
-                                     observation_day=observation_day,
-                                     fit_type=fit_type)
-            # pred_value = \
-            # int(self.data['fit_{}'.format(observation_day)].max())
-            # logging.info(f"Prediction {frame}: {pred_value}")
+                df,
+                x_col="day",
+                y_col="cumulative",
+                popt=popt,
+                observation_day=observation_day)
+            trend_lines.append((fit_type, observation_day, popt, pcov))
+        return trend_lines
 
-    def next_frame(self, i, axis, most_current_day, data):
+    def plot(self, df, trend_lines):
+        """
+        Plot the trend of cumulative cases, observed at
+        earlier days, evolving over time.
+        """
+
+        # initial plot
+        logging.info("In plot")
+        fig = plt.figure()
+        plt.xlabel("Date")
+        plt.ylabel("Cumulative cases")
+        plt.title("Predicting the present: Covid cases in Canada")
+        ax = plt.gca()
+        plt.yscale(YSCALE_TYPE)
+        if YSCALE_TYPE == "log":
+            ax.set_ylim(bottom=10, top=df["cumulative"].max() * 1.5)
+        else:
+            ax.set_ylim(bottom=0, top=df["cumulative"].max() * 1.5)
+        ax.plot(df["cumulative"], "o", markersize=8, alpha=0.9)
+        ax.plot(df["cumulative"],
+                "o",
+                markersize=8,
+                color=sns.color_palette()[0],
+                alpha=0.3)
+        ax.text(
+            0.025,
+            0.96,
+            "",
+            bbox={
+                "facecolor": "white",  # 'facecolor': sns.color_palette()[7],
+                'alpha': 0.8,
+                'pad': 8
+            },
+            verticalalignment="top",
+            transform=ax.transAxes,
+            fontsize=11,
+            alpha=0.8)
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
+        formatter = mdates.ConciseDateFormatter(locator)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+        # ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
+        # xlabels = [
+        # df1.iloc[i]["date"].strftime("%b %d")
+        # for i in range(0, len(df1), 7)
+        # ]
+        # ax.set_xticklabels(xlabels)
+        anim = FuncAnimation(fig,
+                             self.next_frame,
+                             frames=np.arange(self.frame_count),
+                             fargs=[ax, df, trend_lines],
+                             interval=200,
+                             repeat=False,
+                             repeat_delay=2000)
+        Plot().output(anim, plt, self.__class__.__name__, self.output)
+
+    def next_frame(self, i, ax, df, trend_lines):
         """
         Function called from animator to generate frame i of the animation.
         """
-        # (texts, lines, axis) = artists
+        (fit_type, observation_day, popt, pcov) = trend_lines[i]
+        logging.info(f"Frame {i}, observation day: {observation_day}")
+        df = self.update_trend_column(df,
+                                      x_col="day",
+                                      y_col="cumulative",
+                                      trend_col="trend",
+                                      popt=popt,
+                                      pcov=pcov,
+                                      observation_day=observation_day,
+                                      fit_type=fit_type)
+        most_current_day = df["day"].max()
         texts = [
-            child for child in axis.get_children()
+            child for child in ax.get_children()
             if isinstance(child, mpl.text.Text)
         ]
-        lines = axis.get_lines()
-        interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
-        observation_day = most_current_day - self.frame_count + int(
-            i / INTERPOLATIONS) + 1
-        observation_date = data[data["day"] == observation_day].iloc[0]["date"]
-        expected_current_value = round(
-            int(data["fit_{}".format(observation_day)].max()), -3)
+        lines = ax.get_lines()
+        # interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
+        # observation_day = most_current_day - self.frame_count + int(
+        # i / INTERPOLATIONS) + 1
+        observation_date = df.index.values[observation_day]
+        expected_current_value = round(int(df["trend"].max()), -3)
+        interpolate = 0
         if interpolate != 0 and observation_day < most_current_day:
             # Between to data points. Interpolate
-            yfit_lower = data["fit_{}".format(observation_day)].to_list()
-            yfit_upper = data["fit_{}".format(observation_day + 1)].to_list()
+            yfit_lower = df["trend"].to_list()
+            yfit_upper = df["trend"].to_list()
             yfit = [
                 yfit_lower[j] + interpolate * (yfit_upper[j] - yfit_lower[j])
                 for j in range(len(yfit_lower))
             ]
         else:
-            yfit = data["fit_{}".format(observation_day)].to_list()
-        caption = "\n".join(
-            ("Following the trend of the {} days before {},".format(
-                self.fit_points, observation_date.strftime("%b %d")),
-             "we could have expected {} thousand".format(
-                 int(expected_current_value / 1000)),
-             "Covid-19 cases in Canada by {}.".format(
-                 data["date"].max().strftime("%b %d"))))
+            yfit = df["trend"].to_list()
+        datestring = pd.to_datetime(str(observation_date)).strftime("%b %d")
+        expected = int(expected_current_value / 1000)
+        today = df.index.max().strftime("%b %d")
+        caption = "\n".join(((f"Following the trend of the {self.fit_points} "
+                              f"days before {datestring}"),
+                             f"we could have expected {expected} thousand",
+                             f"Covid-19 cases in Canada by {today}."))
         texts[0].set_text(caption)
-        yobs = data["cumulative"].to_list()
+        yobs = df["cumulative"].to_list()
         # Set yobs to None for day > observation_day and yfit to None for day
         # <= observation_day
         yobs = [
-            yobs[i] if i <= (observation_day - data["day"].min()) else None
+            yobs[i] if i <= (observation_day - df["day"].min()) else None
             for i in range(len(yobs))
         ]
         yfit = [
-            yfit[i] if i > (observation_day - data["day"].min()) else None
+            yfit[i] if i > (observation_day - df["day"].min()) else None
             for i in range(len(yfit))
         ]
         lines[0].set_ydata(yobs)
