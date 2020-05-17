@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 # -------------------------------------------------------------------------------
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
-START_DAYS_OFFSET = 0
+START_DAYS_OFFSET = 20
 FIT_TYPE = "exp"  # "exp" or "poly"
 FIT_POINTS = 7
 POPT_GUESS = (3, 0.01, -6)
@@ -560,7 +560,8 @@ class CumulativeCases(DataSet):
         self.frame_count = frame_count
         self.plot_type = plot_type
         self.fit_points = fit_points
-        df = df[df["day"] >= START_DAYS_OFFSET].copy()
+        df = df[df["day"] >= START_DAYS_OFFSET]
+        df["day"] = list(range(len(df)))
         df = self.smooth(df,
                          column_list=["cumulative"],
                          degree=3,
@@ -620,13 +621,11 @@ class CumulativeCases(DataSet):
         """
         fit_min = observation_day - self.fit_points
         fit_max = observation_day
-        norm_x = df[x_col].iloc[fit_min:].min()
-        norm_y = df[y_col].iloc[fit_min:fit_max - 1].max()
+        norm_x = fit_min
+        norm_y = df[y_col].iloc[fit_min:fit_max].max()
         trend = [None] * len(df)
         if fit_type == "exp":
             for day in range(len(df)):
-                # logging.info((f"Day {day}, trend length = {len(trend)},"
-                # f"df length = {len(df)}"))
                 trend[day] = int(
                     self.exp_fit((day - norm_x + 1), *popt) * norm_y)
             df["trend"] = trend
@@ -662,8 +661,8 @@ class CumulativeCases(DataSet):
         # for frame in range(self.frame_count):
         for frame in range(self.frame_count):
             observation_day = most_current_day - self.frame_count + frame + 1
-            logging.info((f"Observation day = {observation_day},"
-                          f"date={df.index.values[observation_day]}"))
+            # logging.info((f"Observation day = {observation_day},"
+            # f"date={df.index.values[observation_day]}"))
             fit_type, popt, pcov = self.fit_trends(
                 df,
                 x_col="day",
@@ -678,7 +677,6 @@ class CumulativeCases(DataSet):
         Plot the trend of cumulative cases, observed at
         earlier days, evolving over time.
         """
-
         # initial plot
         logging.info("In plot")
         fig = plt.figure()
@@ -691,12 +689,14 @@ class CumulativeCases(DataSet):
             ax.set_ylim(bottom=10, top=df["cumulative"].max() * 1.5)
         else:
             ax.set_ylim(bottom=0, top=df["cumulative"].max() * 1.5)
+        # lines
         ax.plot(df["cumulative"], "o", markersize=8, alpha=0.9)
         ax.plot(df["cumulative"],
                 "o",
                 markersize=8,
                 color=sns.color_palette()[0],
                 alpha=0.3)
+        # caption
         ax.text(
             0.025,
             0.96,
@@ -710,16 +710,11 @@ class CumulativeCases(DataSet):
             transform=ax.transAxes,
             fontsize=11,
             alpha=0.8)
+        # x axis ticks and labels
         locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
         formatter = mdates.ConciseDateFormatter(locator)
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(formatter)
-        # ax.xaxis.set_major_locator(ticker.IndexLocator(base=7, offset=0))
-        # xlabels = [
-        # df1.iloc[i]["date"].strftime("%b %d")
-        # for i in range(0, len(df1), 7)
-        # ]
-        # ax.set_xticklabels(xlabels)
         anim = FuncAnimation(fig,
                              self.next_frame,
                              frames=np.arange(self.frame_count),
@@ -734,7 +729,6 @@ class CumulativeCases(DataSet):
         Function called from animator to generate frame i of the animation.
         """
         (fit_type, observation_day, popt, pcov) = trend_lines[i]
-        logging.info(f"Frame {i}, observation day: {observation_day}")
         df = self.update_trend_column(df,
                                       x_col="day",
                                       y_col="cumulative",
