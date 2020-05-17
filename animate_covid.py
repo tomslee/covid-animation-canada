@@ -584,48 +584,7 @@ class CumulativeCases(DataSet):
         """
         # initial plot
         logger.info("Plotting...")
-        fig = plt.figure()
-        plt.xlabel("Date")
-        plt.ylabel("Cumulative cases")
-        plt.title("Predicting the present: Covid cases in Canada")
-        ax = plt.gca()
-        plt.yscale(YSCALE_TYPE)
-        if YSCALE_TYPE == "log":
-            ax.set_ylim(bottom=10, top=df["cumulative"].max() * 1.5)
-        else:
-            ax.set_ylim(bottom=0, top=df["cumulative"].max() * 1.5)
-        # lines
-        ax.plot(df["cumulative"],
-                "-",
-                markersize=6,
-                lw=3,
-                color=sns.color_palette()[0],
-                alpha=0.9)
-        ax.plot(df["trend_0"],
-                "-",
-                markersize=6,
-                lw=3,
-                color=sns.color_palette()[3],
-                alpha=0.3)
-        # caption
-        ax.text(
-            0.025,
-            0.96,
-            "",
-            bbox={
-                "facecolor": "white",  # 'facecolor': sns.color_palette()[7],
-                'alpha': 0.8,
-                'pad': 8
-            },
-            verticalalignment="top",
-            transform=ax.transAxes,
-            fontsize=11,
-            alpha=0.8)
-        # x axis ticks and labels
-        locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
-        formatter = mdates.ConciseDateFormatter(locator)
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
+        fig, ax = plt.subplots()
         anim = FuncAnimation(fig,
                              self.next_frame,
                              frames=(INTERPOLATION_POINTS + 1) *
@@ -641,11 +600,8 @@ class CumulativeCases(DataSet):
         Function called from animator to generate frame i of the animation.
         """
         # Get the objects we are going to update
-        texts = [
-            child for child in ax.get_children()
-            if isinstance(child, mpl.text.Text)
-        ]
-        lines = ax.get_lines()
+        ax.clear()
+
         # Compute the trend_0 and trend_1 columns: the trend on
         # observation_day and on observation_day + 1 where possible
         observation_day = int(i / (INTERPOLATION_POINTS + 1)) + self.fit_points
@@ -659,6 +615,7 @@ class CumulativeCases(DataSet):
         interpolate = (i %
                        (INTERPOLATION_POINTS + 1)) / (INTERPOLATION_POINTS + 1)
         logger.debug(f"Interpolate = {interpolate}")
+        y_obs = df["cumulative"].to_list()
         if interpolate != 0 and observation_day < df["day"].max():
             # Between to data points. Interpolate
             y_fit_0 = df["trend_0"].to_list()
@@ -669,17 +626,6 @@ class CumulativeCases(DataSet):
             ]
         else:
             y_fit = df["trend_0"].to_list()
-        observation_date = df.index.values[observation_day]
-        datestring = pd.to_datetime(str(observation_date)).strftime("%b %d")
-        expected_current_value = round(int(df["trend_0"].max()), -3)
-        expected = int(expected_current_value / 1000)
-        today = df.index.max().strftime("%b %d")
-        caption = "\n".join(((f"Following the trend of the {self.fit_points} "
-                              f"days before {datestring}"),
-                             f"we could have expected {expected} thousand",
-                             f"Covid-19 cases in Canada by {today}."))
-        texts[0].set_text(caption)
-        y_obs = df["cumulative"].to_list()
         # Set y_obs to None for day > observation_day and y_fit to None for day
         # <= observation_day
         y_obs = [
@@ -690,8 +636,55 @@ class CumulativeCases(DataSet):
             y_fit[i] if i > (observation_day) else None
             for i, _ in enumerate(y_fit)
         ]
-        lines[0].set_ydata(y_obs)
-        lines[1].set_ydata(y_fit)
+        ax.plot(df.index,
+                y_obs,
+                "-",
+                markersize=6,
+                lw=3,
+                color=sns.color_palette()[0],
+                alpha=0.9)
+        ax.plot(df.index,
+                y_fit,
+                "-",
+                markersize=6,
+                lw=3,
+                color=sns.color_palette()[2],
+                alpha=0.4)
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Cumulative cases")
+        ax.set_title("Predicting the present: Covid cases in Canada")
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=7)
+        formatter = mdates.ConciseDateFormatter(locator)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+        ax.set_yscale(YSCALE_TYPE)
+        if YSCALE_TYPE == "log":
+            ax.set_ylim(bottom=10, top=df["cumulative"].max() * 1.2)
+        else:
+            ax.set_ylim(bottom=0, top=df["cumulative"].max() * 1.2)
+
+        # caption
+        observation_date = df.index.values[observation_day]
+        datestring = pd.to_datetime(str(observation_date)).strftime("%b %d")
+        expected_current_value = round(int(df["trend_0"].max()), -3)
+        expected = int(expected_current_value / 1000)
+        today = df.index.max().strftime("%b %d")
+        caption = "\n".join(((f"Following the trend of the {self.fit_points} "
+                              f"days before {datestring}"),
+                             f"we could have expected {expected} thousand",
+                             f"Covid-19 cases in Canada by {today}."))
+        ax.text(0.025,
+                0.96,
+                caption,
+                bbox={
+                    "facecolor": sns.color_palette()[4],
+                    'alpha': 0.2,
+                    'pad': 8
+                },
+                verticalalignment="top",
+                transform=ax.transAxes,
+                fontsize=11,
+                alpha=0.8)
 
     def update_trend_columns(self, df, frame, x_col, y_col, trend_cols,
                              trend_lines, observation_day):
