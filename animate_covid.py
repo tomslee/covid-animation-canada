@@ -249,60 +249,40 @@ class Provinces(DataSet):
         self.provinces = []
         # Populations from
         # https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1710000901
-        df = self._prep()
+        # df = self._prep_cumulative()
+        # df = self._prep_daily()
+        df = self._prep_active()
+        df = self.smooth(df)
         self.plot_bcr(df)
         # self.plot_manual(df)
 
-    def _prep(self):
+    def _prep_active(self):
         """
         Take the raw dataframe and aggregate it so it can be used by this plot.
         """
         # as_index False yields three columns, like a SQL Group By
-        sql_cases = """
-        SELECT date_report, province, 1 as cases
-        FROM Cases
-        """
-        df_cases = pd.read_sql(
-            sql_cases,
-            self.dbconn,
-            parse_dates={"date_report": {
-                "format": "%Y-%m-%d %H:%M:%S"
-            }})
+        df_cases = self._prep_cumulative()
+        logger.debug("df_cases")
+        logger.debug(df_cases.tail())
         sql_recovered = """
-        SELECT date_recovered, province, cumulative_recovered
+        SELECT date_recovered as "date", province, cumulative_recovered
         FROM Recovered
         """
         df_recovered = pd.read_sql(
             sql_recovered,
             self.dbconn,
-            parse_dates={"date_report": {
+            index_col="date",
+            parse_dates={"date": {
                 "format": "%Y-%m-%d %H:%M:%S"
             }})
-        self.provinces = df_cases["province"].unique()
-        # df_cases = df_cases[["date_report", "province"]]
-        # Pivot the table on provinces, using the date as index
-        # so that there is a row for each date
-        df_cases = pd.pivot_table(df_cases,
-                                  values="cases",
-                                  columns=["province"],
-                                  index="date_report",
-                                  fill_value=0,
-                                  aggfunc=np.size)
         df_recovered = pd.pivot_table(df_recovered,
                                       values="cumulative_recovered",
                                       columns=["province"],
-                                      index="date_recovered",
+                                      index="date",
                                       fill_value=0,
                                       aggfunc=np.max)
-        print("df_cases")
-        print(df_cases["Alberta"].tail())
-        print("df_recovered")
-        print(df_recovered.tail())
-        # For cumulative data rather than daily totals, replace the
-        # values in each column with cumulative totals using "expanding"
-        for province in self.provinces:
-            df_cases[province] = df_cases[province].to_frame().expanding(
-                1).sum()
+        logger.debug("df_recovered")
+        logger.debug(df_recovered.tail())
         # join using dates (indexes)
         df_join = df_cases.join(df_recovered,
                                 lsuffix='_cases',
@@ -319,11 +299,52 @@ class Provinces(DataSet):
         df_join.set_index("date", inplace=True)
         return df_join
 
+    def _prep_daily(self):
+        """
+        Take the raw dataframe and aggregate it so it can be used by this plot.
+        """
+        sql_cases = """
+        SELECT date_report as "date", province, 1 as cases
+        FROM Cases
+        """
+        df = pd.read_sql(sql_cases,
+                         self.dbconn,
+                         index_col="date",
+                         parse_dates={"date": {
+                             "format": "%Y-%m-%d %H:%M:%S"
+                         }})
+        self.provinces = df["province"].unique()
+        # df = df[["date_report", "province"]]
+        # Pivot the table on provinces, using the date as index
+        # so that there is a row for each date
+        df = pd.pivot_table(df,
+                            values="cases",
+                            columns=["province"],
+                            index="date",
+                            fill_value=0,
+                            aggfunc=np.size)
+        logger.debug(df["Alberta"].tail())
+        return df
+
+    def _prep_cumulative(self):
+        """
+        Take the raw dataframe and aggregate it so it can be used by this plot.
+        For cumulative data rather than daily totals, replace the
+        values in each column with cumulative totals using "expanding"
+        """
+        df = self._prep_daily()
+        for province in self.provinces:
+            df[province] = df[province].to_frame().expanding(1).sum()
+        return df
+
     def plot_bcr(self, df):
         """
         Use the bar_chart_race package to do the plot
+
+        It requires a dataframe df with a date index and
+        numeric values in the other columns
         """
-        logger.info("Bar Chart Race...")
+        logger.info("Plotting a Bar Chart Race...")
         fig, ax = plt.subplots()
         bcr.bar_chart_race(
             df=df,
@@ -335,8 +356,8 @@ class Provinces(DataSet):
             steps_per_period=10,
             period_length=500,
             figsize=(6.5, 3.5),
-            # cmap="dark24",
-            cmap=sns.color_palette(),
+            cmap="dark24",
+            # cmap=sns.color_palette(),
             title='Covid-19 Cases Per Million in Canadian Provinces',
             bar_label_size=7,
             tick_label_size=3,
