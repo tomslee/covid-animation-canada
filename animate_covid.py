@@ -34,6 +34,7 @@ register_matplotlib_converters()
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)-15s %(levelname)-8s%(message)s')
+logger = logging.getLogger('animate_covid')
 
 # -------------------------------------------------------------------------------
 # Parameters
@@ -89,7 +90,7 @@ def download_data(download_always=DOWNLOAD_ALWAYS):
     else:
         update_time = None
     if download_always or datetime.date.today() != update_time:
-        logging.info("Downloading spreadsheet...")
+        logger.info("Downloading spreadsheet...")
         response = requests.get(url)
         with open("canada.xlsx", "wb") as output:
             output.write(response.content)
@@ -109,12 +110,12 @@ def xls_to_db3():
         os.remove("canada.db3")
     dbconn = sqlite3.connect("canada.db3")
     for sheet in ["Cases", "Recovered"]:
-        logging.info(f"Reading spreadsheet sheet {sheet}...")
+        logger.info(f"Reading spreadsheet sheet {sheet}...")
         df = pd.read_excel("canada.xlsx",
                            sheet_name=sheet,
                            skiprows=range(0, 3),
                            index_col=0)
-        logging.info(f"Writing spreadsheet sheet {sheet} into sqlite table...")
+        logger.info(f"Writing spreadsheet sheet {sheet} into sqlite table...")
         df.to_sql(sheet, dbconn, index=True)
 
 
@@ -128,7 +129,7 @@ class Plot():
         """
         Generic output functions
         """
-        logging.info("Writing output...")
+        logger.info("Writing output...")
         filename = "covid_{}.{}".format(dataset.lower(), output)
         if output == "mp4":
             writer = FFMpegFileWriter(fps=10, bitrate=1800)
@@ -258,7 +259,7 @@ class DataSet():
                         np.array(unsmoothed[i:i + window]) *
                         weight) / sum(weight)
                 except ValueError as e:
-                    logging.error(e)
+                    logger.error(e)
                     df[column][i] = float("NaN")
             # df[column] = smoothed
         print("\nIn smooth")
@@ -367,7 +368,7 @@ class Provinces(DataSet):
         """
         Use the bar_chart_race package to do the plot
         """
-        logging.info("Bar Chart Race...")
+        logger.info("Bar Chart Race...")
         fig, ax = plt.subplots()
         bcr.bar_chart_race(
             df=df,
@@ -391,7 +392,7 @@ class Provinces(DataSet):
         """
         Set up the arrays and figure, and call FuncAnimation
         """
-        logging.info("Manual Bar Chart Race...")
+        logger.info("Manual Bar Chart Race...")
         fig, ax = plt.subplots()
         plt.title("Work in progress")
         # plt.xlabel("Cases per million")
@@ -415,7 +416,7 @@ class Provinces(DataSet):
         ax.clear()
         series = df.iloc[i].sort_values(ascending=True).tail(5)
         colors = [color_dict[x] for x in series.index]
-        # logging.info(series)
+        # logger.info(series)
         ax.barh(series.index, series, color=colors)
         ax.text(1,
                 0.2,
@@ -589,8 +590,8 @@ class CumulativeCases(DataSet):
                                          y_normalized,
                                          p0=popt,
                                          maxfev=10000)
-        # logging.info(" *** POLYNOMIAL *** ")
-        # logging.info(pcov_poly)
+        # logger.info(" *** POLYNOMIAL *** ")
+        # logger.info(pcov_poly)
         if fit_type == "exp":
             popt = popt_exp
             pcov = pcov_exp
@@ -619,11 +620,11 @@ class CumulativeCases(DataSet):
         Call fit_trends for each day, adding
         a column for each day's trend to the dataframe.
         """
-        logging.info("Fitting trend lines...")
+        logger.info("Fitting trend lines...")
         popt = POPT_GUESS
         trend_lines = []
         for observation_day in range(FIT_POINTS, len(df)):
-            # logging.info((f"Observation day = {observation_day},"
+            # logger.info((f"Observation day = {observation_day},"
             # f"date={df.index.values[observation_day]}"))
             fit_type, popt, pcov = self.fit_trends(
                 df,
@@ -641,7 +642,7 @@ class CumulativeCases(DataSet):
         earlier days, evolving over time.
         """
         # initial plot
-        logging.info("Plotting...")
+        logger.info("Plotting...")
         fig = plt.figure()
         plt.xlabel("Date")
         plt.ylabel("Cumulative cases")
@@ -798,6 +799,10 @@ def parse_args():
         type=str,
         default="cases",
         help="data set to plot; [cases] or growth or provinces")
+    parser.add_argument("-v",
+                        "--verbose",
+                        action="store_true",
+                        help="log debug messages")
     args = parser.parse_args()
     return args
 
@@ -814,8 +819,11 @@ def main():
     """
     Entry point.
     """
-    logging.info("Starting...")
+    logger.info("Starting...")
     args = parse_args()
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+    logger.debug("Logging debug messages...")
     # config = read_config(args)
     if download_data():
         xls_to_db3()
