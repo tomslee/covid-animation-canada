@@ -40,14 +40,13 @@ logging.basicConfig(level=logging.INFO,
 # -------------------------------------------------------------------------------
 DAYS_EXTRAPOLATION = 14
 DAYS_ANNOTATE = 6
-START_DAYS_OFFSET = 20
+START_DAYS_OFFSET = 30
 FIT_TYPE = "exp"  # "exp" or "poly"
-FIT_POINTS = 7
+FIT_POINTS = 10
 POPT_GUESS = (3, 0.01, -6)
 DOWNLOAD_ALWAYS = False
-FRAME_COUNT = 42
 YSCALE_TYPE = "linear"  # "linear", "log", "symlog", "logit",
-INTERPOLATIONS = 3
+INTERPOLATION_POINTS = 1
 SMOOTHING_DAYS = 7
 # TODO: IMAGEMAGICK_EXE is hardcoded here. Put it in a config file.
 IMAGEMAGICK_DIR = "/Program Files/ImageMagick-7.0.9-Q16"
@@ -169,7 +168,7 @@ class DataSet():
 
     def interpolate(self, df):
         """
-        Interpolate INTERPOLATIONS between every row in df
+        Interpolate INTERPOLATION_POINTS between every row in df
 
         Taking from
         https://medium.com/dunder-data/create-a-bar-chart-race-animation-in-python-with-matplotlib-477ed1590096
@@ -182,8 +181,8 @@ class DataSet():
         # Make the index an incrementing integer starting at zero
         # The existing index gets turned into a column
         df = df.reset_index()
-        # Multiply each index by INTERPOLATIONS
-        df.index = df.index * INTERPOLATIONS
+        # Multiply each index by INTERPOLATION_POINTS
+        df.index = df.index * INTERPOLATION_POINTS
         # reindex to add additional rows in between
         max_index = df.index[-1] + 1
         df = df.reindex(range(max_index))
@@ -519,11 +518,7 @@ class CumulativeCases(DataSet):
     """
     Plot cumulative cases
     """
-    def __init__(self,
-                 output="",
-                 plot_type="cases",
-                 frame_count=FRAME_COUNT,
-                 fit_points=FIT_POINTS):
+    def __init__(self, output="", plot_type="cases", fit_points=FIT_POINTS):
         """
         Initialize the class variables and call what needs to be called.
         The dataframe "data" has a row for each case.
@@ -539,7 +534,8 @@ class CumulativeCases(DataSet):
         , SUM("new_cases") OVER
         (ORDER BY "date" RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
         as "cumulative"
-        , NULL as "trend"
+        , 0 as "trend_0"
+        , 0 as "trend_1"
         FROM (
             SELECT date_report as "date"
             , count(*) as "new_cases"
@@ -555,9 +551,9 @@ class CumulativeCases(DataSet):
                          }})
         # df index is the date.
         # df columns are "day", "cumulative", and "trend"
-        # "trend" is NULL, and will be filled in later
+        # "trend_0" and "trend_1" are NULL, and will be filled in later
+        # We keep two trend columns for interpolation
         self.output = output
-        self.frame_count = frame_count
         self.plot_type = plot_type
         self.fit_points = fit_points
         df = df[df["day"] >= START_DAYS_OFFSET]
@@ -566,7 +562,7 @@ class CumulativeCases(DataSet):
                          column_list=["cumulative"],
                          degree=3,
                          center=False)
-        trend_lines = self.trend_lines(df)
+        trend_lines = self.fit_trend_lines(df)
         self.plot(df, trend_lines)
 
     def fit_trends(self, df, x_col, y_col, popt=None, observation_day=None):
@@ -582,58 +578,26 @@ class CumulativeCases(DataSet):
         norm_y = y.max()
         x_normalized = x - norm_x + 1
         y_normalized = y / norm_y
-        # print(x, y, x_normalized, y_normalized)
         # feed it into scipy, method is one of ‘lm’, ‘trf’, ‘dogbox’}
         popt_exp, pcov_exp = curve_fit(self.exp_fit,
                                        x_normalized,
                                        y_normalized,
                                        p0=popt,
                                        maxfev=10000)
-        # popt_poly, pcov_poly = curve_fit(
-        # self.poly_fit,
-        # x_normalized,
-        # y_normalized,
-        # # p0=popt,
-        # maxfev=10000)
+        popt_poly, pcov_poly = curve_fit(self.poly_fit,
+                                         x_normalized,
+                                         y_normalized,
+                                         p0=popt,
+                                         maxfev=10000)
         # logging.info(" *** POLYNOMIAL *** ")
         # logging.info(pcov_poly)
         if fit_type == "exp":
             popt = popt_exp
             pcov = pcov_exp
-        # elif fit_type == "poly":
-        # popt = popt_poly
-        # pcov = pcov_poly
-        return fit_type, popt, pcov
-
-    def update_trend_column(self,
-                            df,
-                            x_col,
-                            y_col,
-                            trend_col,
-                            observation_day,
-                            popt,
-                            pcov,
-                            fit_type="exp"):
-        """
-        Given a trend function for a given observation day,
-        use it to update a column of the dataframe "df" with
-        values of that function for the whole data range.
-        """
-        fit_min = observation_day - self.fit_points
-        fit_max = observation_day
-        norm_x = fit_min
-        norm_y = df[y_col].iloc[fit_min:fit_max].max()
-        trend = [None] * len(df)
-        if fit_type == "exp":
-            for day in range(len(df)):
-                trend[day] = int(
-                    self.exp_fit((day - norm_x + 1), *popt) * norm_y)
-            df["trend"] = trend
         elif fit_type == "poly":
-            for day in range(len(df)):
-                df.iloc[day]["trend"] = int(
-                    self.poly_fit((day - norm_x + 1), *popt) * norm_y)
-        return df
+            popt = popt_poly
+            pcov = pcov_poly
+        return fit_type, popt, pcov
 
     def double_time(self, data, observation_date):
         """
@@ -650,17 +614,15 @@ class CumulativeCases(DataSet):
         print(x_0, x_1, x_half, y_0, y_1, y_half, obs_day, double_days)
         return double_days
 
-    def trend_lines(self, df):
+    def fit_trend_lines(self, df):
         """
         Call fit_trends for each day, adding
         a column for each day's trend to the dataframe.
         """
-        most_current_day = df["day"].max()
+        logging.info("Fitting trend lines...")
         popt = POPT_GUESS
         trend_lines = []
-        # for frame in range(self.frame_count):
-        for frame in range(self.frame_count):
-            observation_day = most_current_day - self.frame_count + frame + 1
+        for observation_day in range(FIT_POINTS, len(df)):
             # logging.info((f"Observation day = {observation_day},"
             # f"date={df.index.values[observation_day]}"))
             fit_type, popt, pcov = self.fit_trends(
@@ -670,6 +632,7 @@ class CumulativeCases(DataSet):
                 popt=popt,
                 observation_day=observation_day)
             trend_lines.append((fit_type, observation_day, popt, pcov))
+        print(f"Length of trend_lines = {len(trend_lines)}")
         return trend_lines
 
     def plot(self, df, trend_lines):
@@ -678,7 +641,7 @@ class CumulativeCases(DataSet):
         earlier days, evolving over time.
         """
         # initial plot
-        logging.info("In plot")
+        logging.info("Plotting...")
         fig = plt.figure()
         plt.xlabel("Date")
         plt.ylabel("Cumulative cases")
@@ -690,10 +653,10 @@ class CumulativeCases(DataSet):
         else:
             ax.set_ylim(bottom=0, top=df["cumulative"].max() * 1.5)
         # lines
-        ax.plot(df["cumulative"], "o", markersize=8, alpha=0.9)
+        ax.plot(df["cumulative"], "o", markersize=6, alpha=0.9)
         ax.plot(df["cumulative"],
                 "o",
-                markersize=8,
+                markersize=6,
                 color=sns.color_palette()[0],
                 alpha=0.3)
         # caption
@@ -717,7 +680,8 @@ class CumulativeCases(DataSet):
         ax.xaxis.set_major_formatter(formatter)
         anim = FuncAnimation(fig,
                              self.next_frame,
-                             frames=np.arange(self.frame_count),
+                             frames=(INTERPOLATION_POINTS + 1) *
+                             (len(df) - FIT_POINTS),
                              fargs=[ax, df, trend_lines],
                              interval=200,
                              repeat=False,
@@ -728,37 +692,33 @@ class CumulativeCases(DataSet):
         """
         Function called from animator to generate frame i of the animation.
         """
-        (fit_type, observation_day, popt, pcov) = trend_lines[i]
-        df = self.update_trend_column(df,
-                                      x_col="day",
-                                      y_col="cumulative",
-                                      trend_col="trend",
-                                      popt=popt,
-                                      pcov=pcov,
-                                      observation_day=observation_day,
-                                      fit_type=fit_type)
+        observation_day = int(i / (INTERPOLATION_POINTS + 1)) + FIT_POINTS
+        df = self.update_trend_columns(df,
+                                       x_col="day",
+                                       y_col="cumulative",
+                                       trend_cols=["trend_0", "trend_1"],
+                                       trend_lines=trend_lines,
+                                       observation_day=observation_day)
         most_current_day = df["day"].max()
         texts = [
             child for child in ax.get_children()
             if isinstance(child, mpl.text.Text)
         ]
         lines = ax.get_lines()
-        # interpolate = (i % INTERPOLATIONS) / INTERPOLATIONS
-        # observation_day = most_current_day - self.frame_count + int(
-        # i / INTERPOLATIONS) + 1
+        interpolate = (i %
+                       (INTERPOLATION_POINTS + 1)) / (INTERPOLATION_POINTS + 1)
         observation_date = df.index.values[observation_day]
-        expected_current_value = round(int(df["trend"].max()), -3)
-        interpolate = 0
+        expected_current_value = round(int(df["trend_0"].max()), -3)
         if interpolate != 0 and observation_day < most_current_day:
             # Between to data points. Interpolate
-            yfit_lower = df["trend"].to_list()
-            yfit_upper = df["trend"].to_list()
+            yfit_0 = df["trend_0"].to_list()
+            yfit_1 = df["trend_1"].to_list()
             yfit = [
-                yfit_lower[j] + interpolate * (yfit_upper[j] - yfit_lower[j])
-                for j in range(len(yfit_lower))
+                yfit_0[j] + interpolate * (yfit_1[j] - yfit_0[j])
+                for j, _ in enumerate(yfit_0)
             ]
         else:
-            yfit = df["trend"].to_list()
+            yfit = df["trend_0"].to_list()
         datestring = pd.to_datetime(str(observation_date)).strftime("%b %d")
         expected = int(expected_current_value / 1000)
         today = df.index.max().strftime("%b %d")
@@ -780,6 +740,38 @@ class CumulativeCases(DataSet):
         ]
         lines[0].set_ydata(yobs)
         lines[1].set_ydata(yfit)
+
+    def update_trend_columns(self, df, x_col, y_col, trend_cols, trend_lines,
+                             observation_day):
+        """
+        Given a trend function for a given observation day,
+        use it to update two columns of the dataframe "df" with
+        values of that function for the whole data range.
+
+        trend_cols is a two-element list of column names
+        to hold the two trend columns
+        """
+        # do not do a second trend line if we are at the final day in
+        # the data frame
+        j = 1 - int(observation_day / (len(df) - 1))
+        for i in list(range(j + 1)):
+            trend_line = trend_lines[observation_day + i - FIT_POINTS]
+            (fit_type, observation_day, popt, pcov) = trend_line
+            fit_max = observation_day + i
+            fit_min = observation_day + i - self.fit_points
+            norm_x = fit_min
+            norm_y = df[y_col].iloc[fit_min:fit_max].max()
+            trend = [None] * len(df)
+            if fit_type == "exp":
+                for day in range(observation_day, len(df)):
+                    trend[day] = int(
+                        self.exp_fit((day - norm_x + 1), *popt) * norm_y)
+            elif fit_type == "poly":
+                for day in range(observation_day, len(df)):
+                    trend[day] = int(
+                        self.poly_fit((day - norm_x + 1), *popt) * norm_y)
+            df[trend_cols[i]] = trend
+        return df
 
 
 def parse_args():
