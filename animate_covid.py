@@ -195,7 +195,7 @@ class DataSet():
         # Now use the date column as index again
         df = df.set_index("date")
         # rank each row
-        df_rank = df.rank(ax=1, method="first")
+        df_rank = df.rank(axis=1, method="first")
         # interpolate missing values in df and df_rank
         df = df.interpolate()
         df_rank = df_rank.interpolate()
@@ -233,39 +233,6 @@ class DataSet():
         Fitting function for curve fitting (below)
         """
         return a_factor * np.exp(x_var * k_exponent) + b_intercept
-        """
-        DEPRECATED: now use built-in dataframe rolling method, above.
-        Keeping this just in case it is useful.
-        Smooth the values in df
-        Taken from
-        https://towardsdatascience.com/how-to-create-animated-graphs-in-python-bb619cc2dec1
-        df has a date index. All columns are numeric.
-        """
-        # Compute the weights
-        window = degree * 2 - 1
-        weight = np.array([1.0] * window)
-        weight_gauss = []
-        for i in range(window):
-            i = i - degree + 1
-            frac = i / float(window)
-            gauss = 1 / (np.exp((4 * frac)**2))
-            weight_gauss.append(gauss)
-        weight = np.array(weight_gauss) * weight
-        for column in df.columns:
-            unsmoothed = df[column].to_list()
-            smoothed = [0.0] * (len(df) - window)
-            for i, _ in enumerate(smoothed):
-                try:
-                    df[column][i] = sum(
-                        np.array(unsmoothed[i:i + window]) *
-                        weight) / sum(weight)
-                except ValueError as e:
-                    logger.error(e)
-                    df[column][i] = float("NaN")
-            # df[column] = smoothed
-        print("\nIn smooth")
-        print(df.tail())
-        return df
 
 
 class Provinces(DataSet):
@@ -345,19 +312,6 @@ class Provinces(DataSet):
                 f"{province}_recovered"]
         df_join.reset_index(inplace=True)
         df_join.rename(columns={"date_report": "date"}, inplace=True)
-        print("df_join")
-        print(df_join.tail())
-        # df_cases.reset_index(inplace=True)
-        # df_cases.rename(columns={"date_report": "date"}, inplace=True)
-        # df_cases["date"] = [
-        # datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S').date()
-        # for x in df_cases["date"]
-        # ]
-        # for province in self.provinces:
-        # df_cases[province] = 1000000.0 * (df_cases[province] /
-        # self.population[province])
-        # df_cases["day"] = df_cases.index
-        # return df_cases
         columns = ["date"]
         columns.extend(self.provinces)
         df_join = df_join[columns]
@@ -471,9 +425,6 @@ class GrowthRate(DataSet):
                              "format": "%Y-%m-%d %H:%M:%S"
                          }})
         df = df.fillna(0.0)
-        print("In init")
-        print(df.tail())
-        print(df.dtypes)
         self.output = output
         # Interpolate before smoothing!
         df, df_rank = self.interpolate(df)
