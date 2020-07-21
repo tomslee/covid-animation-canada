@@ -110,7 +110,7 @@ def xls_to_db3():
     if os.path.exists("canada.db3"):
         os.remove("canada.db3")
     dbconn = sqlite3.connect("canada.db3")
-    for sheet in ["Cases", "Recovered"]:
+    for sheet in ["Cases", "Recovered", "Mortality", "Testing"]:
         logger.info(f"Reading spreadsheet sheet {sheet}...")
         df = pd.read_excel("canada.xlsx",
                            sheet_name=sheet,
@@ -205,18 +205,19 @@ class DataSet():
                df,
                column_list="all",
                degree=SMOOTHING_DAYS,
-               center=True):
+               center=False):
         """
         Use the pandas "rolling" method
         """
         if column_list == "all":
             column_list = df.columns.to_list()
         for column in column_list:
-            df[column] = df[column].rolling(
-                SMOOTHING_DAYS,
-                win_type="gaussian",
-                center=center,
-                min_periods=0).mean(std=SMOOTHING_STD)
+            df[column] = df[column].rolling(SMOOTHING_DAYS,
+                                            win_type="triang",
+                                            center=center,
+                                            min_periods=0).mean()
+            # Alternative: use win_type="gauss" and a std.
+            # min_periods=0).mean(std=SMOOTHING_STD)
         df.fillna(method='ffill', inplace=True)
         # values at the "top" of df may still be NaN
         df.fillna(0, inplace=True)
@@ -275,28 +276,80 @@ class Provinces(DataSet):
             parse_dates={"date": {
                 "format": "%Y-%m-%d %H:%M:%S"
             }})
+        print("-----")
+        print("df_recovered before pivot")
+        print(df_recovered.head())
         df_recovered = pd.pivot_table(df_recovered,
                                       values="cumulative_recovered",
                                       columns=["province"],
                                       index="date",
                                       fill_value=0,
                                       aggfunc=np.max)
-        logger.debug("df_recovered")
-        logger.debug(df_recovered.tail())
+        print("-----")
+        print("df_recovered after pivot")
+        print(df_recovered.head())
+
+        # died
+        sql_died = """
+        SELECT date_death_report as "date", province,
+            row_number() over
+                (partition by province order by "date"
+                range between unbounded preceding
+                and current row) as "cumulative_died"
+        FROM Mortality
+        order by province, "date", "cumulative_died"
+        """
+        df_died = pd.read_sql(
+            sql_died,
+            self.dbconn,
+            index_col="date",
+            parse_dates={"date": {
+                "format": "%Y-%m-%d %H:%M:%S"
+            }})
+        df_died = df_died.sort_values(["date", "province", "cumulative_died"])
+        df_died = pd.pivot_table(df_died,
+                                 values="cumulative_died",
+                                 columns=["province"],
+                                 index="date",
+                                 aggfunc=np.max)
+        df_died = df_died.fillna(method="ffill")
+        print("-----")
+        print("df_died")
+        print(df_died.tail())
         # join using dates (indexes)
-        df_join = df_cases.join(df_recovered,
-                                lsuffix='_cases',
-                                rsuffix='_recovered')
+        df_join = df_cases.join(df_recovered, lsuffix='', rsuffix='_recovered')
+        df_join = df_join.rename(columns={
+            "PEI": "PEI_cases",
+            "NWT": "NWT_cases",
+            "Yukon": "Yukon_cases"
+        })
+        df_join["PEI_died"] = 0
+        df_join["NWT_died"] = 0
+        df_join["Yukon_died"] = 0
+        print("-----")
+        print("df_join with recovered")
+        print(df_join.tail())
+        df_join = df_join.join(df_died, lsuffix='_cases', rsuffix='_died')
+        print("-----")
+        print("df_join with died")
+        print(df_join.tail())
+        print("-----")
+        print("df_join columns")
+        print(df_join.columns)
         for province in self.provinces:
-            df_join[province] = df_join[f"{province}_cases"] - df_join[
-                f"{province}_recovered"]
-        df_join.reset_index(inplace=True)
-        df_join.rename(columns={"date_report": "date"}, inplace=True)
+            if province != "Repatriated":
+                df_join[province] = df_join[f"{province}_cases"] - df_join[
+                    f"{province}_recovered"] - df_join[f"{province}_died"]
+        df_join = df_join.reset_index()
+        df_join = df_join.rename(columns={"date_report": "date"})
         columns = ["date"]
         columns.extend(self.provinces)
         df_join = df_join[columns]
         df_join = df_join.fillna(0)
-        df_join.set_index("date", inplace=True)
+        df_join = df_join.set_index("date")
+        print("-----")
+        print("df_join")
+        print(df_join.tail(n=50))
         return df_join
 
     def _prep_daily(self):
@@ -532,10 +585,7 @@ class CumulativeCases(DataSet):
         self.fit_points = fit_points
         df = df[df["day"] >= START_DAYS_OFFSET]
         df["day"] = list(range(len(df)))
-        df = self.smooth(df,
-                         column_list=["cumulative"],
-                         degree=3,
-                         center=False)
+        df = self.smooth(df, column_list=["cumulative"])
         logger.debug((f"Initial values: index={df.index.values[0]}, "
                       f"day={df['day'].iloc[0]}, "
                       f"cumulative={df['cumulative'].iloc[0]}"))
